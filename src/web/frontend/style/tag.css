@@ -1,0 +1,15 @@
+/* 策略：标签（纸上规范）。双层莫兰迪：浅调为底、同族深调描边与字。
+   .strong 走灰泥绿一族；.bad 保持唯一语义色（朱）。 */
+.tag {
+  display: inline-flex;
+  align-items: center;
+  height: 18px;
+  padding: 0 8px;
+  border: 1px solid var(--soft-2);
+  border-radius: 3px;
+  background: var(--paper);
+  color: var(--mid);
+  font-size: 11px;
+}
+.tag.strong { background: #e8ede5; border-color: #7d8f76; color: #4f5c49; }
+.tag.bad { background: var(--paper); border-color: var(--bad); color: var(--bad); }

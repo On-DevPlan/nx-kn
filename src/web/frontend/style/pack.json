@@ -1,0 +1,6 @@
+{
+  "name": "paper",
+  "label": "纸上规范 · 纸质感极简 + 边框主义（双层莫兰迪点缀）",
+  "extends": null,
+  "strategies": ["btn", "tag", "card", "colhead", "row", "kv", "toast", "snippet-box", "cli-hint", "dlg"]
+}

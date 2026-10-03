@@ -1,0 +1,16 @@
+/* 策略：CLI 等价提示（纸上规范）。 */
+.cli-hint {
+  color: var(--mid);
+  font-size: 11px;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px;
+  padding: 6px 12px;
+  border-top: 1px solid var(--soft-2);
+}
+.cli-cmd { font-family: ui-monospace, Consolas, monospace; color: var(--ink); }
+/* 标志位与命令同等地位：都是「可复制去跑」的东西，一起走 --ink。
+   （.cli-hint-label/.cli-hint-sep/.cli-hint-tail 故意不定义——它们要的就是
+   继承 .cli-hint 的次要灰，作为命令列表周围的说明词。） */
+.cli-hint-flag { color: var(--ink); }

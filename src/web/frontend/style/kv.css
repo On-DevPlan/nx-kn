@@ -1,0 +1,6 @@
+/* 策略：键值表（纸上规范）。 */
+.kv { margin: 0; }
+.kv-row { display: flex; align-items: center; gap: 10px; border-bottom: 1px solid var(--soft-2); }
+.kv-row:last-child { border-bottom: 0; }
+.kv dt { color: var(--mid); font-size: 11px; width: 80px; flex-shrink: 0; padding-left: 12px; }
+.kv dd { margin: 0; min-width: 0; padding: 6px 12px 6px 0; font-size: 12px; display: flex; align-items: center; }

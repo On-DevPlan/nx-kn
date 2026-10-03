@@ -1,0 +1,11 @@
+/* 策略：卡片头（纸上规范）。12px 加粗，发丝线压底。 */
+.colhead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 12px;
+  height: 28px;
+  border-bottom: 1px solid var(--soft-2);
+  font-size: 12px;
+  font-weight: 700;
+}

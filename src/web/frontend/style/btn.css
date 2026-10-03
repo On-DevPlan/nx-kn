@@ -1,0 +1,23 @@
+/* 策略：按钮（纸上规范）。白纸描边，按下时墨沉下去——按钮是纸上的印章位。
+   28px 高、4px 圆角；无投影，立体感只来自按压瞬间的反色。 */
+.btn {
+  font: inherit;
+  cursor: pointer;
+  padding: 0 12px;
+  height: 28px;
+  font-size: 12px;
+  border: 1px solid var(--ink);
+  border-radius: 4px;
+  background: var(--paper);
+  color: var(--ink);
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.btn:hover { outline: 1px solid var(--ink); outline-offset: 1px; }
+.btn:active:not(:disabled) { background: var(--ink); color: var(--paper); outline: none; }
+.btn:disabled { border-color: var(--soft-2); color: var(--mid); background: var(--paper); cursor: not-allowed; }
+.btn.ghost { border-color: var(--soft-2); }
+.btn.small { height: 22px; padding: 0 8px; font-size: 11px; }
+.btn.danger { border-color: var(--bad); color: var(--bad); background: var(--paper); }
+.btn.danger:active:not(:disabled) { background: var(--bad); color: #fff; }

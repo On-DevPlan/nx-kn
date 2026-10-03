@@ -1,0 +1,26 @@
+/* 策略：列表行（纸上规范）。28px 行高、发丝线分隔；min-width 约定同骨架原版。 */
+.row {
+  display: flex;
+  align-items: center;
+  height: 28px;
+  padding: 0 12px;
+  border-bottom: 1px solid var(--soft-2);
+}
+.row:hover { background: var(--soft); }
+.row:last-child { border-bottom: 0; }
+.row .name { font-weight: 600; min-width: 22ch; max-width: 40%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.row .desc { color: var(--mid); flex: 1; min-width: 0; padding-left: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.row .acts { margin-left: auto; display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
+
+/* 变体 .row.wrap：装不下单行的行（典型是检索命中的多行代码片段）。
+   固定 28px 高 + .desc 的 nowrap/ellipsis 会把多行内容裁到与相邻行叠字，
+   这里改成自适应高 + 允许换行，.desc 独占第二行放片段块。 */
+.row.wrap { height: auto; flex-wrap: wrap; align-items: flex-start; padding: 8px 12px; row-gap: 6px; }
+.row.wrap .name { max-width: none; flex: 1; }
+.row.wrap .desc {
+  flex-basis: 100%;
+  white-space: normal;
+  overflow: visible;
+  text-overflow: clip;
+  padding-left: 0;
+}

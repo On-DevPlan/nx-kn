@@ -1,0 +1,77 @@
+/* 面板样式，按四层组织。**改样式前先看这一段**：
+ *   1. tokens   设计变量（tokens@<主题>/tokens.css，生成时按 tokens 枚举选一）——只准 :root
+ *   2. base     本文件：reset / body / 工具类 / 表单 / 空态 / table，跨风格共享
+ *   3. style    组件策略（style@<风格>/style/ 十件，按 style 选项选一）——.btn/.tag/.card
+ *               等原子类在这里，换风格 = 换这层；策略 css 不准出现 :root
+ *   4. layout   版式（layout@<布局>/，按 layout 枚举选一）——按你的项目自由改
+ *
+ * 为什么要分层：早期版本把各层混在一张表里，六个孪生项目各改各的，
+ * 同一个 .btn 在不同项目里长成了三样。分层后「必须一致」与「随项目」各有其主。
+ *
+ * 视觉规范（本骨架的硬标准，别用 AI 默认审美覆盖）：
+ *   - 无 emoji；黑白灰为主，只有 --bad 一个语义色
+ *   - 密度双层：行高 28px、核心字号 12px
+ *   - 分隔靠 1px 浅底线，主体视觉连续，不靠卡片阴影堆叠
+ */
+
+/* ============================================================
+   base —— 跨风格共享的底层
+   ============================================================ */
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--paper);
+  color: var(--ink);
+  font-family: system-ui, -apple-system, 'Segoe UI', 'Microsoft YaHei', sans-serif;
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.mono, code, pre { font-family: ui-monospace, Consolas, monospace; }
+.muted { color: var(--mid); }
+.bad { color: var(--bad); }
+.nowrap { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* --- 表单 --- */
+input, select {
+  height: var(--row-h);
+  font-size: var(--fs-core);
+  padding: 0 8px;
+  border: 1px solid var(--soft-2);
+  border-radius: 4px;
+  background: var(--paper);
+  font-family: inherit;
+  /* 不写 color 会落到 UA 默认的 #545454，与 --ink 不一致（截图实测过）。 */
+  color: var(--ink);
+}
+input:focus, select:focus { outline: none; box-shadow: var(--shadow-relief-inset); }
+/* placeholder 同理：不写就是 UA 的 #757575（4.6:1，压线）。 */
+input::placeholder { color: var(--mid); }
+
+/* --- 表单行三件套 ---
+   .opt-row / .opt-label / .opt-actions 是骨架 settings 视图与各模块面板共用的类名，
+   但 templates/server-cli-web 只写了类名、没有任何 CSS 定义（nx-kn 生成后实测：
+   `document.styleSheets` 里查不到这三条规则，input 退回浏览器默认宽 151px）。
+   补在这里的 base 层——它本来就管 input/select，属于同一层职责。 */
+.opt-row { display: flex; align-items: center; gap: 8px; min-height: var(--row-h); }
+.opt-row > input, .opt-row > select { flex: 1; min-width: 0; }
+.opt-label { width: 80px; flex-shrink: 0; color: var(--mid); font-size: 11px; }
+.opt-actions { display: flex; gap: 8px; padding: 8px 12px; }
+
+/* --- 空态 --- */
+.empty { color: var(--mid); padding: 18px 12px; }
+.empty code { background: var(--soft); padding: 1px 5px; border-radius: 4px; }
+
+/* --- 可复制文本 --- */
+.copyable { cursor: copy; }
+.copyable:hover { background: var(--soft); }
+
+/* --- 工具栏 --- */
+.toolbar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+
+/* --- 表格 --- */
+table.levels { border-collapse: collapse; width: 100%; font-size: var(--fs-core); }
+table.levels th { text-align: left; color: var(--mid); font-weight: 600; }
+table.levels th, table.levels td { height: var(--row-h); padding: 0 8px 0 0; border-bottom: 1px solid var(--soft-2); }
+table.levels tbody tr:last-child td { border-bottom: 0; }

@@ -1,0 +1,14 @@
+/* 策略：代码块（纸上规范）。白底细框，直角。 */
+.snippet-box {
+  display: block;
+  border: 1px solid var(--soft-2);
+  border-radius: 0;
+  background: var(--paper);
+  padding: 8px 10px;
+  font-family: ui-monospace, Consolas, monospace;
+  font-size: 12px;
+  /* 片段是内容，不是注脚：不继承所在 .desc 的次要灰（--mid，5:1），
+     用 --ink 保证长代码一眼能读。 */
+  color: var(--ink);
+}
+.snippet-box pre { font: inherit; margin: 0; white-space: pre-wrap; }

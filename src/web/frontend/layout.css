@@ -1,0 +1,72 @@
+/* ============================================================
+   3. layout —— 版式（tabs）。
+   **这一层随项目自由改**；tokens/atomic 层在 style.css 里，别把
+   原子类抄过来——两层的变更纪律不同（见 style.css 头部说明）。
+   ============================================================ */
+
+/* 头部：两行。第一行 = 身份（brand + 版本），第二行 = 导航（.tabbar）。
+   把「我是谁」和「我在哪」分开——挤一行时版本号跟着导航挤 flex，
+   两边都在争视觉重心，谁也不突出。 */
+header {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: center;
+  padding: 12px 16px;
+  background: var(--paper);
+  z-index: 5;
+}
+
+.brand { font-weight: 700; letter-spacing: 0.5px; display: inline-flex; align-items: center; gap: 8px; }
+.brand img { width: 24px; height: 24px; border-radius: 7px; display: block; }
+.brand .sub { font-weight: 400; color: var(--mid); margin-left: 8px; font-size: 12px; }
+
+header .meta {
+  margin-left: auto;
+  min-width: 0;
+  max-width: 46vw;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--mid);
+  font-size: 12px;
+  font-family: ui-monospace, Consolas, monospace;
+}
+
+/* 导航条：sticky 双保险（header 不再 sticky，它不挡内容），底线只在
+   tabbar 上——视觉上「标签在哪，分界线就在哪」 */
+.tabbar {
+  position: sticky;
+  top: 0;
+  background: var(--paper);
+  border-bottom: var(--border);
+  z-index: 5;
+}
+.tabbar nav { display: flex; flex-wrap: wrap; gap: 2px; padding: 0 16px; }
+
+/* 标签块：文字 + 底部 2px 指示条，占比重的是字号和字重，不是背景和阴影。
+   底部指示条贴住容器的 border-bottom，形成「标签页插在线上」的关系。 */
+.tab {
+  border: 0;
+  background: none;
+  padding: 7px 12px 9px;
+  border-radius: 0;
+  cursor: pointer;
+  color: var(--mid);
+  font-size: 13px;
+  box-shadow: inset 0 -2px 0 transparent;
+}
+.tab:hover { color: var(--ink); }
+.tab.active {
+  color: var(--ink);
+  font-weight: 600;
+  box-shadow: inset 0 -2px 0 var(--ink);
+}
+
+
+/* 主区：与 header/tabbar 同一条 16px 边距线——卡片边缘对齐品牌区与导航，
+   不留满幅贴边（贴边时卡片边框被视口裁切，双细线风格直接破相）。 */
+main { padding: 16px; min-width: 0; }
+
+/* 并排卡片用 .cols，避免每个视图各写一套 flex */
+.cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 14px; align-items: start; }

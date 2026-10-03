@@ -1,0 +1,12 @@
+/* 策略：卡片（纸上规范 · 笺）。线说话两次：1.5px 主线围出版框，
+   outline 退 2px 再补一道细线——刻本的书口。直角，无投影。 */
+.card {
+  padding: 0;
+  border: 1.5px solid var(--ink);
+  border-radius: 0;
+  outline: 1px solid var(--ink);
+  outline-offset: 2px;
+  background: var(--paper);
+}
+.stack > .card + .card { margin-top: 14px; }
+.cols > .card + .card { margin-top: 0; }

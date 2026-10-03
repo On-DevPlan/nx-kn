@@ -1,0 +1,33 @@
+/* tokens —— light（默认主题）：黑白灰纸面，只有 --bad 一个语义色。 */
+:root {
+  --ink: #14161a;
+  --paper: #fff;
+  --soft: #f5f6f7;
+  --soft-2: #ebedf0;
+  /* --mid 是唯一承载「次要文字」的色。原值 #8b9096 在白底上只有 3.22:1，
+     远低于 WCAG AA 的 4.5:1，而它被 11 处文字样式引用（dt/tab/desc/tag/cli-hint/
+     brand .sub/.muted/.empty/按钮禁用态…）——整个面板的注脚、标签、行内说明
+     都是这个灰，视觉上糊成一片。改为 #6a6f76（白底 5.06:1，灰底 4.7:1），
+     色相不变，仍是「明确的次要」，但读得清。改这一个值即可全量生效。 */
+  --mid: #6a6f76;
+  --bad: #b3261e;
+
+  --border: 1px solid var(--soft-2);
+  --row-h: 28px;
+  --btn-h: 32px;
+  --fs-core: 12px;
+  --radius-btn: 8px;
+
+  /* 立体感三件套：常态 / 按下 / 内凹（表单聚焦）。
+     只在这三处用，别扩散到卡片和列表——那会让界面变吵。 */
+  --shadow-relief: -1px -1px 2px rgba(255, 255, 255, 0.85), 2px 2px 6px rgba(20, 22, 26, 0.07);
+  --shadow-relief-press: inset 1px 1px 2px rgba(20, 22, 26, 0.1),
+    inset -1px -1px 2px rgba(255, 255, 255, 0.7);
+  --shadow-relief-inset: inset 1px 1px 2px rgba(20, 22, 26, 0.06),
+    inset -1px -1px 2px rgba(255, 255, 255, 0.9);
+}
+
+body {
+  background: var(--paper);
+  color: var(--ink);
+}
