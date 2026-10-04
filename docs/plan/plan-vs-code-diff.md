@@ -15,10 +15,10 @@
 | 1 生成骨架 | `server-cli-web --letters kn` | 已生成，`pnpm test` 全绿 | ✅ |
 | 2 Obsidian 适配层 | `index / query / status` 跑通 | 四条 action（含 `kb use`）跑通 | ✅ |
 | 3 面板 + skill | 检索界面 + `skill install` → `~/.claude/skills` | 两者均已落地 | ✅ |
-| 4 增量与守护 | 改笔记 → 检索立即可见 | 增量已可用（`index` 默认增量 + 面板「更新索引」）；自动守护未做 | 🟡 |
-| 5 外部资料采集 | v0.2 预留 | 未做（符合计划） | ⬜ 按计划 |
+| 4 增量与守护 | 改笔记 → 检索立即可见 | **增量索引 + 守护均已落地**：`index` 默认增量、面板「更新索引」；`nx-kn watch` 前台常驻 / `serve` 进程内默认开启（`--no-watch` 可关）/ 面板「守护」开关（见 W1） | ✅ |
+| 5 外部资料采集 | v0.2 预留 | **已实现**（且**改判为纯 Node**，非原计划的 Python 子进程——见 `stage-5-external-collection-spec.md` 的 D1）：`crawl add/run/list/remove`，产物落普通 `.md` 目录并自动登记为知识库，索引/检索/增量/多库合并全部复用 kb 域 | ✅ 超出原「预留」口径 |
 
-**工程一致性**：命令表 15 条 · 单测 31/31 · smoke 13/13 · 分层约束（eslint 枚举禁列 + 一致性测试）· 一条 action 三端同源 —— 均达标。
+**工程一致性**：命令表 19 条 · 单测 66/66 · smoke 15/15 · 流水线 18/18 · 分层约束（eslint 枚举禁列 + 一致性测试）· 一条 action 三端同源 —— 均达标。
 
 ---
 
@@ -36,7 +36,7 @@
 | **N2** | 已用作多库合并排序依据 | `service.js` `queryOne`/`query` |
 | **N3** | 已修：`HIT_RE` 支持可选 `score=` 捕获组，`hit.score` 为数字或 `null` | `core/zg.js` + `tests/unit/zg-parser.test.mjs` |
 | **N4** | 已写进文档（排除规则不是可选项，附 325/551 实测） | `references/10-knowledge-base.md` §三 |
-| **N5** | **仍未处理**：vault 是 git 仓库，`.zvec-grep/` 会进 `git status`。需用户决定加 `.gitignore` 还是把索引移出 vault | 待定 |
+| **N5** | **已解决**（2026-10-04）：vault 侧已加 `.gitignore` 挡住索引产物。实测 `git -C "D:\Obsidian Vault" check-ignore -v .zvec-grep` → `.gitignore:2:.zvec-grep/`，`git status` 里不再出现 `.zvec-grep/`。采用「原地加 `.gitignore`」而非「索引移出 vault」——索引留在 vault 内才能与 zg 的 workspace 语义一致 | `D:\Obsidian Vault\.gitignore`（vault 侧，不在本仓） |
 | **N6** | `config` 只写不读已写进文档的排障与模型两节 | `references/10-knowledge-base.md` §七 |
 | **B1** | 已修：模型改为每库一个；迁移时**丢弃**旧全局 `model`（已知脏值） | `core/store.js` `normalizeKb` |
 | **B2** | 已修：`status` 不再回落 store；未建索引显示「（未记录）」 | `service.js` `status` |

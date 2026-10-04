@@ -1,7 +1,8 @@
 # nx-kn 计划 — Obsidian 本地知识库 × zvec-grep 向量检索
 
-> 状态：**阶段 0–3 已完成**（2026-10-04 验收）；阶段 4 的「增量」能力已实测可用（守护未做）；
-> 阶段 5 按计划留给 v0.2。
+> 状态：**阶段 0–5 均已完成**（2026-10-04）。阶段 4 = 增量索引 + 守护（watch，见本文件阶段 4）；
+> 阶段 5 = 外部资料采集（crawl，**已改判为纯 Node**——决策修正见本文件阶段 5 正文与
+> `stage-5-external-collection-spec.md` 的 D1）。
 > 编制时间：2026-10-03 ｜ 归档时间：2026-10-04
 > 脚手架：`nx-nx` → `server-cli-web`（letters = `kn`）
 > 引擎：`zg`（zvec-grep）
@@ -462,7 +463,7 @@ Obsidian 一次保存连发多个事件）、**串行不重入**（索引期间�
 | 1 | vault 绝对路径 | `D:\Obsidian Vault` |
 | 2 | 规模与语言 | 真实笔记 **226 篇** md、以中文为主；另有 `.obsidian/` 内 325 篇 md（占全部 md 的 59%，被排除规则挡掉） |
 | 3 | qwen API key | **始终未提供** → 全链路走本地模型（见 D1） |
-| 4 | 是否接 Sync / git | **是 git 仓库**（`D:\Obsidian Vault\.git` 存在）→ 索引写 vault 内会被 `git status` 看到（见 N5） |
+| 4 | 是否接 Sync / git | **是 git 仓库**（`D:\Obsidian Vault\.git` 存在）→ 索引写 vault 内曾会被 `git status` 看到；已由 vault 侧 `.gitignore` 挡住（见 N5） |
 | 5 | 面板外观选项 | port 7881 / vitePort 7882 / tokens light / layout tabs / style paper / scheme mars / v0.1.0 |
 | 6 | 交付形态 | 本机跑 + 远程仓库 `On-DevPlan/nx-kn` |
 | 7 | 单 vault 还是一个索引多 vault 并存 | **多 vault 并存**（见 D3——这是本计划最大的一次口径变更） |
@@ -484,7 +485,7 @@ Obsidian 一次保存连发多个事件）、**串行不重入**（索引期间�
 | **N2** | `zg query --trace` 输出 `score=`，是标准 **RRF**（由排名派生，**跨库可比**） | `#1 matchedBy=fts+vector score=0.0328 a.md:1-3`；`2/61 = 0.0328`。这是多库合并排序的唯一依据 |
 | **N3** | 给 query 加 `--trace` 会**静默污染路径** | `HIT_RE` 的 `(.+)` 贪婪吃掉 `score=0.0328 `，`path` 变成 `"score=0.0328 a.md"`；不报错、只是路径全错。已改为可选捕获组 + 单测 |
 | **N4** | `.obsidian/` 占 vault 全部 md 的 59% | 顶层 md 计 551、`.obsidian` 325 → 真实笔记 226。排除规则不是可选项 |
-| **N5** | vault 是 git 仓库 → `<vault>/.zvec-grep/` 会进 `git status` | `D:\Obsidian Vault\.git` 存在。**原计划 §5.4 的风险成立**，处理方式待定（`.gitignore` 或索引移出 vault） |
+| **N5** | vault 是 git 仓库 → `<vault>/.zvec-grep/` 会进 `git status` | `D:\Obsidian Vault\.git` 存在，**原计划 §5.4 的风险成立**；已解决：vault 侧 `.gitignore` 写入 `.zvec-grep/`，实测 `git check-ignore -v .zvec-grep` → `.gitignore:2:.zvec-grep/` |
 | **N6** | `zg config` **只写不读**（无 `provider list` / `model get`）；`zg query --json` 已移除；`zg onboard` 已不存在 | 实测报错文本。探测 key 只能看 `config.json` 是否存在；读当前模型看 `zg status` 的 `Embedding` 行 |
 
 ### 阶段 4 的更新
