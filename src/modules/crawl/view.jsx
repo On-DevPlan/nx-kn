@@ -1,6 +1,6 @@
 // crawl 视图：资料采集面板。
 //
-// 只做两件事——让采集源可见（有哪些源、抓到多少页、上次什么时候抓的），
+// 只做两件事——让采集源可见（有哪些源、用什么引擎、抓到多少页、上次什么时候抓的），
 // 让采集可操作（添加源 / 抓取 / 移除）。所有操作都有一条同构 CLI 命令（CliHints）。
 //
 // 采集完成后抓下来的目录会**自动登记为知识库**，所以这个页面本身不做检索——
@@ -10,9 +10,20 @@ import { api } from '../../web/frontend/api/client.js';
 import { CliHints } from '../../web/frontend/components/CliHints.jsx';
 import { useDialog, useToast } from '../../web/frontend/components/ui.jsx';
 
-// 抓取是慢操作（串行 + 300ms 节流，几百页可能要几分钟）。给一个宽松的上限，
-// 避免请求被前端提前掐断。
+// 抓取是慢操作（内置引擎串行 + 300ms 节流，几百页可能要几分钟；外部引擎还要先拉依赖）。
+// 给一个宽松的上限，避免请求被前端提前掐断。
 const CRAWL_TIMEOUT = 900_000;
+
+// 引擎选项。与 core/paths.js 的 CRAWL_ENGINES 一一对应——面板是给人看的，
+// 所以这里带上「代价」，让人一眼看出选它意味着什么。
+const ENGINE_OPTIONS = [
+  { value: 'skill-seekers', label: 'Skill Seekers（外部引擎 · 需 Python 3.10+/uv）' },
+  { value: 'node', label: '内置 Node（零依赖 · 只收静态 HTML）' },
+];
+
+function engineLabel(e) {
+  return e === 'skill-seekers' ? 'Skill Seekers' : 'Node';
+}
 
 function fmtTime(iso) {
   if (!iso) return '（未抓取）';
@@ -46,12 +57,18 @@ export default function CrawlView() {
   async function addSource() {
     const r = await dialog({
       title: '添加采集源',
-      message: '填入一个文档站地址。抓下来的页面会清洗成 markdown，并自动登记为知识库。',
+      message:
+        '填入一个文档站地址。抓下来的页面会清洗成 markdown，并自动登记为知识库。\n' +
+        '默认用 Skill Seekers（外部引擎，需要本机有 Python 3.10+ 与 uv）；\n' +
+        '只想零依赖跑、或站点是纯静态 HTML 时，选内置 Node。',
       fields: [
         { key: 'url', label: '起始地址（http/https）', placeholder: 'https://vitepress.dev/guide/', value: '' },
         { key: 'name', label: '源名（留空自动推导）', placeholder: 'vitepress-dev', value: '' },
+        { key: 'engine', label: '抓取引擎', options: ENGINE_OPTIONS, value: 'skill-seekers' },
+        { key: 'level', label: '增强级别 0-3（0 = 纯抓取，不调 LLM）', placeholder: '0', value: '0' },
+        { key: 'agent', label: '增强 agent（可留空，Skill Seekers 默认 claude）', placeholder: '', value: '' },
         { key: 'match', label: '路径过滤 glob（默认全部）', placeholder: '**', value: '**' },
-        { key: 'max', label: '最多抓取页数', placeholder: '200', value: '200' },
+        { key: 'max', label: '最多抓取页数（内置引擎的边界；Skill Seekers 不受此限）', placeholder: '200', value: '200' },
       ],
       okText: '添加',
     });
@@ -63,11 +80,15 @@ export default function CrawlView() {
         body: {
           url: r.url,
           name: r.name || undefined,
+          engine: r.engine || undefined,
+          // 键名必须与 action 声明的 flag 名一致——HTTP 那端走的是同一套 applySpec。
+          'enhance-level': r.level === '' ? 0 : Number(r.level),
+          agent: r.agent || undefined,
           match: r.match || '**',
           max: r.max ? Number(r.max) : undefined,
         },
       });
-      toast(`已添加采集源 [${out.name}]`);
+      toast(`已添加采集源 [${out.name}] · 引擎 ${engineLabel(out.engine)}`);
       await refresh();
     } catch (e) {
       toast(String(e.message || e));
@@ -146,8 +167,10 @@ export default function CrawlView() {
             <dd className="mono">抓取 → 清洗成 markdown → 自动登记为知识库 → 建索引 → 检索</dd>
           </div>
           <div className="kv-row">
-            <dt>范围</dt>
-            <dd className="mono">静态 HTML 文档站；优先 sitemap，回退同域 BFS；只抓同源</dd>
+            <dt>引擎</dt>
+            <dd className="mono">
+              默认 Skill Seekers（外部，需 Python 3.10+/uv）；可切内置 Node（零依赖，只收静态 HTML）
+            </dd>
           </div>
         </dl>
 
@@ -163,6 +186,7 @@ export default function CrawlView() {
               [{s.name}] {s.url}
             </div>
             <div className="acts">
+              <span className="tag">{engineLabel(s.engine)}</span>
               {s.registered ? <span className="tag strong">已入知识库</span> : <span className="tag">未入知识库</span>}
               {s.failed > 0 ? <span className="tag bad">失败 {s.failed}</span> : null}
               <button className="btn small ghost" disabled={!!busy} onClick={() => removeSource(s.name)}>
@@ -170,7 +194,9 @@ export default function CrawlView() {
               </button>
             </div>
             <div className="desc">
-              {`${s.pages} 页 · 方式 ${s.via || '—'} · 上次抓取 ${fmtTime(s.lastRunAt)}` +
+              {`${s.pages} 页` +
+                (s.engine === 'skill-seekers' ? `（增强 ${s.enhanceLevel}）` : ` · 方式 ${s.via || '—'}`) +
+                ` · 上次抓取 ${fmtTime(s.lastRunAt)}` +
                 ` · 范围 ${s.include}（≤${s.max}）`}
             </div>
           </div>

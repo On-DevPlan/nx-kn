@@ -42,6 +42,48 @@ test('normalizeCrawl：非法 max（0/负数/非数）回落到 200', () => {
   assert.deepEqual(out.sources.map((s) => s.max), [200, 200, 200]);
 });
 
+test('normalizeCrawl：抓取引擎缺省补默认（skill-seekers），非法值也回落默认', () => {
+  const out = normalizeCrawl({
+    sources: [
+      { name: 'old', url: 'https://old.com/' }, // 老记录：没有 engine 键
+      { name: 'ok', url: 'https://ok.com/', engine: 'node' },
+      { name: 'bad', url: 'https://bad.com/', engine: 'wget' }, // 不认识的引擎
+    ],
+  });
+  assert.equal(out.sources[0].engine, 'skill-seekers', '老 store 必须能直接跑，不能因为缺字段变 undefined');
+  assert.equal(out.sources[1].engine, 'node', '合法的显式选择必须保留');
+  assert.equal(out.sources[2].engine, 'skill-seekers', '非法值回落默认，而不是原样带下去');
+});
+
+test('normalizeCrawl：增强级别只认 0~3 的整数，其余回落 0', () => {
+  const out = normalizeCrawl({
+    sources: [
+      { name: 'a', url: 'https://a.com/', enhanceLevel: 2 },
+      { name: 'b', url: 'https://b.com/', enhanceLevel: 0 },
+      { name: 'c', url: 'https://c.com/', enhanceLevel: 4 }, // 越界
+      { name: 'd', url: 'https://d.com/', enhanceLevel: -1 }, // 负数
+      { name: 'e', url: 'https://e.com/', enhanceLevel: 1.5 }, // 非整数
+      { name: 'f', url: 'https://f.com/', enhanceLevel: 'x' }, // 非数
+      { name: 'g', url: 'https://g.com/' }, // 缺省
+    ],
+  });
+  assert.deepEqual(
+    out.sources.map((s) => s.enhanceLevel),
+    [2, 0, 0, 0, 0, 0, 0]
+  );
+});
+
+test('normalizeCrawl：agent 缺省为 null（不是空串，也不是 undefined）', () => {
+  const out = normalizeCrawl({
+    sources: [
+      { name: 'a', url: 'https://a.com/' },
+      { name: 'b', url: 'https://b.com/', agent: 'kimi' },
+    ],
+  });
+  assert.equal(out.sources[0].agent, null);
+  assert.equal(out.sources[1].agent, 'kimi');
+});
+
 test('normalize：老 store（无 crawl 键）读进来自动补上，不需要迁移脚本', () => {
   const s = normalize({ version: 1, settings: {}, kb: { vaults: [{ path: '/x' }] } });
   assert.deepEqual(s.crawl, { sources: [] });

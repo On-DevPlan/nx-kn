@@ -1,6 +1,6 @@
 {
   "name": "nx-kn",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "description": "Obsidian 知识库检索（zg 引擎）",
   "type": "module",
   "bin": {

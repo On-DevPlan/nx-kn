@@ -14,8 +14,11 @@ pnpm start    # 构建并启动面板
 按融合分（RRF）合并成一张列表，每条标出所属库。本机工具：CLI 与 Web 面板共享同一份
 action 声明（`src/modules/*/index.js`），一条命令三端同源——CLI、HTTP API、面板按钮不会分叉。
 
-需要时还能把 **vault 之外的文档站抓下来**：`crawl run` 把静态 HTML 清洗成 markdown、
+需要时还能把 **vault 之外的文档站抓下来**：`crawl run` 抓取、清洗成 markdown、
 落成普通目录并**自动登记为知识库**，于是索引 / 检索 / 增量 / 多库合并全部复用 kb 域。
+抓取引擎二选一（`--engine`）：默认 `skill-seekers`（外部 Python 引擎，需本机
+Python 3.10+ 或 uv；抓取/分类能力更强，可选 LLM 增强）；`node` 为内置纯 Node 引擎
+（零外部依赖，离线可用）。
 
 索引也可以**自动跟上**：`nx-kn watch` 常驻监听各库，笔记一变就自动跑增量索引；
 `nx-kn serve` 起的面板里**默认已开**这道守护，面板上能看最近刷新、随手开关。
@@ -42,7 +45,8 @@ nx-kn status                          # 各库的索引状态 / 生效模型 / �
 抓一个文档站（静态 HTML）：
 
 ```bash
-nx-kn crawl add https://vitepress.dev/guide/ --name vitepress   # 登记采集源（不联网）
+nx-kn crawl add https://vitepress.dev/guide/ --name vitepress   # 登记采集源（不联网），默认引擎 skill-seekers
+nx-kn crawl add <url> --name x --engine node                    # 没有 Python？显式用内置引擎
 nx-kn crawl run --name vitepress                                # 抓取 + 清洗成 markdown（默认增量）
 nx-kn index                                                     # 抓下来的目录已自动登记，直接建索引
 nx-kn query "怎么配置主题"                                       # 与本地 vault 一起被检索

@@ -9,7 +9,7 @@
 // - 自己写入后主动刷新缓存 mtime，避免「自己触发自己重读」
 import fsp from 'node:fs/promises';
 import { dirname } from 'node:path';
-import { storePathFromEnv } from './paths.js';
+import { CRAWL_ENGINES, DEFAULT_CRAWL_ENGINE, storePathFromEnv } from './paths.js';
 
 // 项目自己的初始结构。改这里即可扩展存储，老数据由 normalize 自动补齐。
 export function initialState() {
@@ -179,15 +179,23 @@ function displayNameOf(p) {
 
 // 一条采集源记录。name 是目录名（必填，决定抓取产物落哪），url 是起点。
 // include / max 是「抓哪些、抓多少」的边界，缺省给安全值（全收 / 上限 200）。
+// engine / enhanceLevel / agent 是抓取引擎参数：老记录（没有这些键）一律按默认引擎补齐，
+// 于是「老 store 读进来就能用」这条约定对采集域同样成立，不需要迁移脚本。
 function normalizeSource(s) {
   if (!s || typeof s !== 'object') return null;
   const name = s.name ? String(s.name) : null;
   const url = s.url ? String(s.url) : null;
   if (!name || !url) return null; // 缺 name 或 url 的记录无法工作，直接丢弃
   const max = Number(s.max);
+  const engine = CRAWL_ENGINES.includes(s.engine) ? String(s.engine) : DEFAULT_CRAWL_ENGINE;
+  const level = Number(s.enhanceLevel);
   return {
     name,
     url,
+    engine,
+    // 只认 0~3 的整数；其余（含 undefined / NaN / 越界）回落到 0 = 纯抓取，不调 LLM。
+    enhanceLevel: Number.isInteger(level) && level >= 0 && level <= 3 ? level : 0,
+    agent: s.agent ? String(s.agent) : null,
     include: s.include ? String(s.include) : '**',
     max: Number.isFinite(max) && max > 0 ? Math.floor(max) : 200,
     addedAt: s.addedAt ? String(s.addedAt) : null,

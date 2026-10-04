@@ -1,8 +1,9 @@
 # nx-kn 计划 — Obsidian 本地知识库 × zvec-grep 向量检索
 
 > 状态：**阶段 0–5 均已完成**（2026-10-04）。阶段 4 = 增量索引 + 守护（watch，见本文件阶段 4）；
-> 阶段 5 = 外部资料采集（crawl，**已改判为纯 Node**——决策修正见本文件阶段 5 正文与
-> `stage-5-external-collection-spec.md` 的 D1）。
+> 阶段 5 = 外部资料采集（crawl）。阶段 5 有**两次改判**：先由「Python 子进程」改判**纯 Node**（见
+> 阶段 5 正文与 `stage-5-external-collection-spec.md` 的 D1），后又改判**双引擎、默认 `skill-seekers`**
+> （外部进程），纯 Node 实现保留为内置引擎 `--engine node`（见阶段 5 正文「二次改判」）。
 > 编制时间：2026-10-03 ｜ 归档时间：2026-10-04
 > 脚手架：`nx-nx` → `server-cli-web`（letters = `kn`）
 > 引擎：`zg`（zvec-grep）
@@ -30,7 +31,7 @@
 | 索引落盘 | **vault 内** `<vault>/.zvec-grep/` |
 | 能力范围 | **纯检索**（不含 LLM 问答、不含 wikilink/backlink 图谱） |
 | skill 交付 | `nx-kn skill install` 装到 **`~/.claude/skills`**（同 nx-rp；骨架 A04 / B04 规范） |
-| 外部资料采集 | 原为「v0.2 预留：只借 Skill Seekers 思路，Node → Python 子进程 stdio（按 B05 标准）」→ **2026-10-04 改判**：**阶段 5 已实现，纯 Node**（内置 `fetch` + cheerio/turndown，**无子进程**）；Skill Seekers 仅作**参考实现阅读**，不是依赖 |
+| 外部资料采集 | 原为「v0.2 预留：只借 Skill Seekers 思路，Node → Python 子进程 stdio（按 B05 标准）」→ **2026-10-04 改判（一）**：阶段 5 已实现，纯 Node（内置 `fetch` + cheerio/turndown）→ **2026-10-04 二次改判**：**双引擎**，默认引擎改为外部 `skill-seekers`（经子进程调用，数组参数不经 shell），纯 Node 实现保留为内置引擎 `--engine node`（npm 包仍零强制依赖；详见阶段 5 正文「二次改判」） |
 | 执行节奏 | **先出计划，执行等确认** |
 
 ### 架构图对齐（第二轮确认，2026-10-03 22:55）
@@ -43,7 +44,7 @@
 | 2. obsidian 兼容 | vault 原位读取 + 排除/噪声处理 | 阶段 2 |
 | 3. obsidian 的 skill 作为子 skill 可安装 | `nx-kn skill install` → `~/.claude/skills` | 阶段 3 |
 | 4. zg 项目 → boot → nx-rp 里有案例 → zg-cli → 需要向量 api | onboard 流程照抄 `nx-rp/src/modules/doc/zg.js`；需 qwen key | 阶段 0 / 2 |
-| 5. skill-seeker → 一丢丢爬虫参考 → python 的子进程 → B05 subprocess stdio / rt 的 python 部分 | **已落地（阶段 5，2026-10-04）**：借 [Skill Seekers](https://github.com/yusufkaraaslan/Skill_Seekers)（Python，18 种数据源 → 知识资产，自带 stdio 模式 MCP）的抓取与清洗**思路**——**仅阅读参考，不作为依赖**；但图中「python 的子进程」这一环**未采纳**：已改判**纯 Node**，故 `B05-multi-line-cli-input` 的多行 CLI 协议与 rt 的 Python 部分**均不进主干**（理由见本文阶段 5「决策修正」表与 spec 的 D1） | 阶段 5 |
+| 5. skill-seeker → 一丢丢爬虫参考 → python 的子进程 → B05 subprocess stdio / rt 的 python 部分 | **已落地（阶段 5，2026-10-04）**：借 [Skill Seekers](https://github.com/yusufkaraaslan/Skill_Seekers)（Python，18 种数据源 → 知识资产，自带 stdio 模式 MCP）的抓取与清洗**思路**。**两次改判**：先改判纯 Node（图中「python 的子进程」未采纳、B05 与 rt-python 不进主干）；后又按用户决定**二次改判为双引擎**——默认引擎就是 `skill-seekers`（经子进程调用，数组参数不经 shell，`B05` 的多行 CLI 协议仍不需要），纯 Node 实现保留为内置引擎 `--engine node` | 阶段 5 |
 | 背景：nx-rp ｜ 最后效果：像 rp 一样支持对整体知识库的检索 | 目标一句话的出处 | §0 |
 
 ---
@@ -296,12 +297,32 @@ Obsidian 一次保存连发多个事件）、**串行不重入**（索引期间�
 | 命令面 | `crawl add / run / list / remove`（与 kb 域动词对齐，`run` 对应 kb 的 `index`） |
 | JS 渲染 | MVP **不做**（需要时再评估 Node 版 `playwright`） |
 
-#### 参考实现（只借思路，不引入为依赖）
+#### 二次改判（2026-10-04 晚）：默认引擎改为 Skill Seekers，纯 Node 降为内置引擎
+
+用户决策（原话「用」）：**真把 Skill Seekers 用起来**——默认引擎设为 `skill-seekers`（经
+子进程调用），并允许 `--enhance-level 1-3` 的 LLM 增强。这相当于把上文「若将来确实需要
+Python 再按可选旁路加入」的预留口子提前打开，但形态有变：
+
+| 维度 | 决定 |
+| --- | --- |
+| 默认引擎 | `skill-seekers`（外部进程）；`--engine node` 用内置纯 Node 实现（**保留**，npm 包零强制依赖的底线不破） |
+| 调用契约 | `spawn(bin, argsArray)`，**不经 shell**——URL 天然带 `%`（`%20` 等），zg.js 那套 cmd.exe 垫片的 `%`/`"` 禁令在抓取场景不成立，参数以数组直达子进程即无二次解释 |
+| 候选链 | 环境变量 `NX_KN_SKILL_SEEKERS_CMD`（唯一，不回退）→ PATH 上的 `skill-seekers` → `uvx --from skill-seekers skill-seekers`（免安装，首次联网拉约 50 MB） |
+| 失败语义 | **不静默回落**：起不来就报错并给两条出路（装它 / `--engine node`）；进程真跑起来后的非 0 是业务失败，换候选重跑无意义 |
+| 增量 | 与内置引擎同一套「正文内容哈希」清单（`.nx-kn-crawl.json` 记 `engine`），换引擎后首轮全量重写属预期 |
+| 中间产物 | skill-seekers 在系统临时 scratch 目录里跑，只把 `.md` 摘进 `sources/<名>/`（SQLite 索引、缓存等不进知识库） |
+| CI 不联网底线 | 流水线 P10–P13 **钉死 `--engine node`**；P15/P15b 用 `NX_KN_SKILL_SEEKERS_CMD` 指向假引擎脚本，**离线**验证外部引擎全链路（抓取→落盘→登记→可检索）与「命令不存在时报错指路」 |
+| 本机实测 | Windows 上 uvx 拉包成功但写默认缓存报 `os error 5`（拒绝访问）；换 `UV_CACHE_DIR` 可解——已写进随包手册排障表 |
+
+上表取代「实现口径」表中「进程形态」一行的单一取值；其余行（数据流 / 增量 / 命令面）不变。
+
+#### 参考实现 → 默认引擎（两次改判后身份有变）
 
 [Skill Seekers](https://github.com/yusufkaraaslan/Skill_Seekers)（MIT，Python 3.10+）：
 文档站 / GitHub 仓库 / PDF 等 18 种数据源 → 抓取 → 分类 → AI 增强 → 打包，
-自带 stdio 模式 MCP 服务器。「一丢丢爬虫参考」指借它的抓取与清洗思路 —— 仅**阅读参考**，
-不是被调用的组件。
+自带 stdio 模式 MCP 服务器。最初定位是「一丢丢爬虫参考、仅阅读」；二次改判后
+它是**默认抓取引擎**（经子进程调用），但**仍不是 npm 依赖**——不装 Python 的机器
+靠 `--engine node` 保持开箱可用。
 
 ---
 

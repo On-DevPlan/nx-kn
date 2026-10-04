@@ -4,30 +4,52 @@
 // 于是索引（zg）、检索、增量、多库合并、面板展示全部复用 kb 域，一行都不用特化；
 // 采集域只负责「URL → 干净 markdown」这一件事。这是它能保持「一丢丢」的原因。
 //
-// 为什么是纯 Node（不套 Python 子进程，见 docs/plan/stage-5-external-collection-spec.md §1）：
-// nx-kn 是发布到 npm 的包，要求用户另外装 Python 3.10+ / venv 直接违背
-// 「装上即可用、不需要用户额外手动操作」。抓公开文档站既无登录也无验证码，
-// 渲染交给 Node 内置 fetch + cheerio，不需要浏览器。
+// ---- 两个引擎 ----
+//
+// 抓取有两条实现路径，用 `engine` 选择，**默认 skill-seekers**：
+//
+//   skill-seekers  外部引擎（Python 3.10+ / uv）。抓取、分类、组织成
+//                  `SKILL.md + references/` 由它负责，我们只把产出摘进 vault。
+//                  `--enhance-level` 可让它调外部 agent 写增强内容。
+//                  代价：要求用户机器上有 Python + uv（或自行 pip 安装）。
+//
+//   node           内置引擎，纯 Node（fetch + cheerio + turndown），零额外依赖。
+//                  代价：只认静态 HTML，不分类、不增强。
+//
+// 为什么默认是 skill-seekers 而不是「零依赖的 node」：这是 2026-10-04 的显式选择
+// （见 docs/plan/nx-kn-plan.md 的决策修正）。**代价是被明知的**——没装 Python 的机器
+// 上 `crawl run` 会直接报错。所以错误信息必须把两条出路都写清楚：
+// `--engine node` 用内置引擎，或装上 uv 让 uvx 免安装拉起。
+// 依赖的调用细节在 core/skill-seekers.js（含 env 逃生舱 NX_KN_SKILL_SEEKERS_CMD）。
 //
 // 命令面（与 kb 域动词对齐）：
-//   crawl add <url> [--name n] [--match glob] [--max n]   写：登记一个采集源
-//   crawl run [--name n] [--rebuild]                      写：抓取并落成 md（默认增量）
-//   crawl list                                            读：源列表 + 上次抓取统计
-//   crawl remove <name> [--purge]                         写：解登记（默认保留文件）
+//   crawl add <url> [--name n] [--engine e] [--enhance-level 0-3] [--match glob] [--max n]
+//   crawl run [--name n] [--engine e] [--rebuild]
+//   crawl list
+//   crawl remove <name> [--purge]
 import { createHash } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import fsp from 'node:fs/promises';
-import { dirname, join, resolve } from 'node:path';
+import { tmpdir } from 'node:os';
+import { basename, dirname, join, relative, resolve, sep } from 'node:path';
 import { badInput, conflict, external, notFound } from '../../core/errors/index.js';
 import { loadStore, mutateStore } from '../../core/store.js';
 import {
   APP_NAME,
+  CRAWL_ENGINES,
   CRAWL_MANIFEST,
   CRAWL_UA,
+  DEFAULT_CRAWL_ENGINE,
   assertSafeName,
   crawlDelayMs,
   sourceDirOf,
 } from '../../core/paths.js';
+import {
+  SKILL_SEEKERS_TIMEOUT_MS,
+  describeCandidate,
+  listMarkdownFiles,
+  runSkillSeekers,
+} from '../../core/skill-seekers.js';
 import {
   fetchText,
   globMatch,
@@ -44,6 +66,12 @@ import {
 
 const DEFAULT_MAX = 200;
 
+// 抓取引擎常量定义在 core/paths.js（store 的归一化也要用它补默认值，而 core 不能依赖
+// modules）。这里只是转发，让 index.js 从一个地方（service）就能拿到枚举与默认值。
+export const ENGINES = CRAWL_ENGINES;
+export const DEFAULT_ENGINE = DEFAULT_CRAWL_ENGINE;
+const ENGINE_SS = 'skill-seekers';
+
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const sha256 = (s) => createHash('sha256').update(String(s)).digest('hex');
 
@@ -53,6 +81,11 @@ async function isDir(p) {
   } catch {
     return false;
   }
+}
+
+function engineOf(rec, override) {
+  const e = override || (rec && rec.engine) || DEFAULT_ENGINE;
+  return ENGINES.includes(e) ? e : DEFAULT_ENGINE;
 }
 
 // ---- 源名推导 ----
@@ -86,6 +119,12 @@ function yamlScalar(v) {
   return '"' + s.replace(/\\/g, '\\\\').replace(/"/g, '\\"') + '"';
 }
 
+// 取第一个一级标题当标题（与 node 引擎从 <h1> 取标题等价）。
+function firstHeading(md) {
+  const m = String(md || '').match(/^\s*#\s+(.+?)\s*$/m);
+  return m ? m[1].trim() : null;
+}
+
 // ---- 采集清单（源目录内的 .nx-kn-crawl.json）----
 
 async function readManifest(dir) {
@@ -113,14 +152,33 @@ export async function storedSources() {
 
 // ---- add：登记一个采集源 ----
 
-export async function add({ url, name, include, max } = {}) {
-  if (!url) throw badInput(`用法: ${APP_NAME} crawl add <url> [--name <名>] [--match <glob>] [--max <n>]`);
+export async function add({ url, name, include, max, engine, enhanceLevel, agent } = {}) {
+  if (!url) {
+    throw badInput(
+      `用法: ${APP_NAME} crawl add <url> [--name <名>] [--engine <${ENGINES.join('|')}>] ` +
+        `[--enhance-level <0-3>] [--agent <名>] [--match <glob>] [--max <n>]`
+    );
+  }
 
   const abs = normalizeUrl(String(url));
   if (!abs) throw badInput(`不是合法的 http(s) 地址: ${url}`);
 
   const nm = name ? String(name) : deriveName(abs);
   assertSafeName(nm, '采集源名');
+
+  // 引擎：不合法直接报错，不静默回落 —— 「我明明选了 A，怎么按 B 跑了」是最难查的一类问题。
+  const eng = engine === undefined || engine === null || engine === '' ? DEFAULT_ENGINE : String(engine);
+  if (!ENGINES.includes(eng)) {
+    throw badInput(`--engine 只能是 ${ENGINES.join(' | ')}，收到: ${engine}`);
+  }
+
+  // 增强级别 0~3（0 = 纯抓取，不调任何 LLM）。仅对 skill-seekers 有意义，但一律校验、一律存储，
+  // 这样「先按 node 抓、以后换 ss 重抓」时参数不会莫名丢失。
+  const lvl = enhanceLevel === undefined || enhanceLevel === null || enhanceLevel === '' ? 0 : Number(enhanceLevel);
+  if (!Number.isInteger(lvl) || lvl < 0 || lvl > 3) {
+    throw badInput(`--enhance-level 只能是 0~3 的整数，收到: ${enhanceLevel}`);
+  }
+  const ag = agent ? String(agent) : null;
 
   const inc = include ? String(include) : '**';
   const mx = max === undefined || max === null || max === '' ? DEFAULT_MAX : Number(max);
@@ -141,10 +199,14 @@ export async function add({ url, name, include, max } = {}) {
   await writeManifest(dir, {
     name: nm,
     url: abs,
+    engine: eng,
+    enhanceLevel: lvl,
+    agent: ag,
     include: inc,
     max: mx,
     createdAt: new Date().toISOString(),
     updatedAt: null,
+    via: null,
     pages: {},
   });
 
@@ -152,6 +214,9 @@ export async function add({ url, name, include, max } = {}) {
     store.crawl.sources.push({
       name: nm,
       url: abs,
+      engine: eng,
+      enhanceLevel: lvl,
+      agent: ag,
       include: inc,
       max: mx,
       addedAt: new Date().toISOString(),
@@ -167,6 +232,9 @@ export async function add({ url, name, include, max } = {}) {
     status: 'ok',
     name: nm,
     url: abs,
+    engine: eng,
+    enhanceLevel: lvl,
+    agent: ag,
     dir,
     include: inc,
     max: mx,
@@ -191,6 +259,9 @@ export async function list() {
     rows.push({
       name: s.name,
       url: s.url,
+      engine: engineOf(s, null),
+      enhanceLevel: Number.isInteger(s.enhanceLevel) ? s.enhanceLevel : 0,
+      agent: s.agent || null,
       dir,
       include: s.include,
       max: s.max,
@@ -242,7 +313,9 @@ export async function remove({ name, purge = false } = {}) {
   };
 }
 
-// ---- 发现：sitemap 优先，回退同域 BFS ----
+// ================= 引擎 A：内置 Node =================
+//
+// 发现：sitemap 优先，回退同域 BFS。抓取与清洗都不依赖外部进程。
 
 // 递归收集 sitemap 里的页面 URL。sitemap index 会往下钻（限深 3 层、限 5000 条，
 // 免得遇到「无限嵌套的 sitemap 站」时把内存吃光）。
@@ -265,18 +338,20 @@ async function collectSitemap(smUrl, xml, origin, out, seenSitemaps, depth) {
   }
 }
 
-// ---- run：抓取并落成 markdown ----
-
 // 单个源的抓取。**串行 + 节流**（不并发）：既有礼貌，也让日志顺序可读。
-async function runOne(s, { rebuild }) {
+async function runOneViaNode(s, { rebuild }) {
   const dir = sourceDirOf(s.name);
   await fsp.mkdir(dir, { recursive: true });
 
   const manifest = (await readManifest(dir)) || {};
   // --rebuild = 无视已存哈希，全部重写。默认增量：内容没变的页面**不落盘**，
   // 从而让后续 zg 增量索引如实报「unchanged」（不动 mtime，就不必重嵌入）。
-  const prev = !rebuild && manifest.pages ? manifest.pages : {};
-  const next = { ...(manifest.pages || {}) };
+  //
+  // 只在「上次也是 node 引擎」时才相信旧的 url→file 映射：换过引擎，命名空间不同
+  // （ss 按它自己的分类目录落盘），沿用旧映射只会得到一堆假的「未变」。
+  const sameEngine = manifest.engine !== ENGINE_SS;
+  const prev = !rebuild && sameEngine && manifest.pages ? manifest.pages : {};
+  const next = { ...(sameEngine ? manifest.pages || {} : {}) };
 
   const stats = { added: 0, updated: 0, unchanged: 0, failed: 0, skipped: 0 };
   const failures = [];
@@ -406,7 +481,8 @@ async function runOne(s, { rebuild }) {
       const detail = failures.slice(0, 5).map((f) => `${f.url} —— ${f.error}`).join('\n  ');
       throw external(
         `没有抓到任何页面（源：${s.url}）${stats.failed ? `\n  失败 ${stats.failed} 次：\n  ` + detail : ''}\n` +
-          `  检查地址是否可访问、是否为静态 HTML；需要 JS 渲染的站点本版本不支持。`
+          `  检查地址是否可访问、是否为静态 HTML；需要 JS 渲染的站点内置引擎不支持——` +
+          `可改用 skill-seekers：${APP_NAME} crawl run --name ${s.name} --engine skill-seekers`
       );
     }
   }
@@ -414,6 +490,9 @@ async function runOne(s, { rebuild }) {
   await writeManifest(dir, {
     name: s.name,
     url: s.url,
+    engine: 'node',
+    enhanceLevel: null,
+    agent: null,
     include: s.include,
     max: s.max,
     createdAt: manifest.createdAt || new Date().toISOString(),
@@ -422,20 +501,202 @@ async function runOne(s, { rebuild }) {
     pages: next,
   });
 
+  return { mode, stats, failures, pages: Object.keys(next).length, produced };
+}
+
+// ================= 引擎 B：Skill Seekers =================
+//
+// 与内置引擎的区别：**发现、抓取、清洗、分类全在外部进程里完成**，我们只做两件事——
+// 把它的产出摘进 vault，以及维持增量语义。
+
+// Skill Seekers 把产物落在 `<cwd>/output/<名>/`（名字可由 `--name` 指定）。
+// 但它的目录命名规则是它自己的实现细节、会随版本变，所以这里不硬编码路径，
+// 而是「先按 --name 找 → 再找 output 下唯一的目录 → 再找最近修改的那个 → 最后兜底扫 SKILL.md」。
+async function pickSkillSeekersOutput(scratch, name) {
+  const outRoot = join(scratch, 'output');
+  const named = join(outRoot, String(name));
+  if (await isDir(named)) return named;
+
+  let dirs = [];
+  try {
+    const entries = await fsp.readdir(outRoot, { withFileTypes: true });
+    dirs = entries.filter((e) => e.isDirectory()).map((e) => join(outRoot, e.name));
+  } catch {
+    dirs = [];
+  }
+  if (dirs.length === 1) return dirs[0];
+  if (dirs.length > 1) {
+    const stamped = [];
+    for (const d of dirs) {
+      try {
+        stamped.push({ d, t: (await fsp.stat(d)).mtimeMs });
+      } catch {
+        /* 竞态：抓取期间被挪走，跳过 */
+      }
+    }
+    stamped.sort((a, b) => b.t - a.t);
+    if (stamped.length) return stamped[0].d;
+  }
+
+  // 兜底：scratch 下任意含 SKILL.md 的目录
+  const hit = (await listMarkdownFiles(scratch)).find((p) => basename(p) === 'SKILL.md');
+  return hit ? dirname(hit) : null;
+}
+
+// 给产出补一层 frontmatter（来源、引擎、抓取时间），与内置引擎的产物保持同构。
+// 已经自带 frontmatter 的（Skill Seekers 的 SKILL.md 通常自带）原样保留，不叠加。
+function withFrontmatter(body, sourceUrl) {
+  const text = String(body ?? '');
+  if (/^---\s*\r?\n/.test(text)) return text;
+  return (
+    '---\n' +
+    `source: ${yamlScalar(sourceUrl)}\n` +
+    'engine: skill-seekers\n' +
+    `fetchedAt: ${new Date().toISOString()}\n` +
+    '---\n\n' +
+    text.replace(/^\s+/, '') +
+    '\n'
+  );
+}
+
+async function runOneViaSkillSeekers(s, { rebuild }) {
+  const dir = sourceDirOf(s.name);
+  await fsp.mkdir(dir, { recursive: true });
+
+  const manifest = (await readManifest(dir)) || {};
+  const sameEngine = manifest.engine === ENGINE_SS;
+  const prev = !rebuild && sameEngine && manifest.pages ? manifest.pages : {};
+  const next = { ...(sameEngine ? manifest.pages || {} : {}) };
+
+  const stats = { added: 0, updated: 0, unchanged: 0, failed: 0, skipped: 0 };
+  const failures = [];
+  const level = Number.isInteger(s.enhanceLevel) ? s.enhanceLevel : 0;
+
+  // 让 skill-seekers 在**库外**的临时目录里产出：它的中间产物（SQLite 索引、
+  // search.py、各种缓存）不该混进知识库。抓完只把 .md 摘进去。
+  const scratch = await fsp.mkdtemp(join(tmpdir(), `nx-kn-ss-${s.name}-`));
+  let outDir = null;
+  try {
+    const args = ['create', s.url, '--name', s.name, '--enhance-level', String(level)];
+    if (s.agent) args.push('--agent', String(s.agent));
+
+    const r = await runSkillSeekers(args, { cwd: scratch, timeoutMs: SKILL_SEEKERS_TIMEOUT_MS });
+    if (!r.ok) {
+      const detail = (r.stderr || r.stdout || r.error || '').trim().split('\n').slice(0, 8).join('\n  ');
+      throw external(
+        `skill-seekers 抓取失败（源：${s.url}）${detail ? `\n  ${detail}` : ''}\n` +
+          `  换内置引擎重试：${APP_NAME} crawl run --name ${s.name} --engine node`
+      );
+    }
+
+    outDir = await pickSkillSeekersOutput(scratch, s.name);
+    if (!outDir) {
+      throw external(
+        `skill-seekers 跑完了，但没有找到产出目录（预期 ${join(scratch, 'output')} 下有内容）——\n` +
+          `  可能是它的输出布局变了（当前通过 ${describeCandidate({ bin: r.bin, args: [] })} 调用）。\n` +
+          `  换内置引擎试试：${APP_NAME} crawl run --name ${s.name} --engine node`
+      );
+    }
+
+    const files = await listMarkdownFiles(outDir);
+    for (const absFile of files) {
+      const rel = relative(outDir, absFile).split(sep).join('/');
+      // --match 作用在与内置引擎同名空间上：把 rel 补成 `/guide/x.md` 形态再匹配，
+      // 于是 `--match '/guide/**'` 在两个引擎下意思一致。
+      if (!globMatch(s.include, '/' + rel)) {
+        stats.skipped++;
+        continue;
+      }
+
+      let raw;
+      try {
+        raw = await fsp.readFile(absFile, 'utf8');
+      } catch (err) {
+        stats.failed++;
+        failures.push({ url: rel, error: String((err && err.message) || err) });
+        continue;
+      }
+
+      const hash = sha256(raw);
+      const target = join(dir, rel);
+      const existed = existsSync(target);
+      const rec = prev[rel];
+
+      if (rec && rec.hash === hash && existed) {
+        stats.unchanged++;
+      } else {
+        await fsp.mkdir(dirname(target), { recursive: true });
+        await fsp.writeFile(target, withFrontmatter(raw, s.url), 'utf8');
+        if (existed || rec) stats.updated++;
+        else stats.added++;
+      }
+      next[rel] = { file: rel, hash, title: firstHeading(raw) };
+    }
+  } finally {
+    await fsp.rm(scratch, { recursive: true, force: true });
+  }
+
+  const produced = stats.added + stats.updated + stats.unchanged;
+
+  // 与内置引擎同一条纪律：一页都没产出且此前也没有 → 绝不建出空内容的源。
+  if (produced === 0) {
+    const hadContent = Object.keys(prev).length > 0 || existsSync(join(dir, 'SKILL.md'));
+    if (!hadContent) {
+      throw external(
+        `skill-seekers 没有产出任何 markdown（源：${s.url}）\n` +
+          `  检查地址是否可访问；或用内置引擎对比：${APP_NAME} crawl run --name ${s.name} --engine node`
+      );
+    }
+  }
+
+  // skill-seekers 不受 --max 约束（它自己决定抓多少页）。超了如实报出来，
+  // **不截断**——把已经抓好的内容悄悄丢掉，比多抓几页糟糕得多。
+  const max = Number(s.max) || DEFAULT_MAX;
+  const note =
+    produced > max
+      ? `skill-seekers 不受 --max 控制：实际产出 ${produced} 页（登记上限 ${max}，未截断）`
+      : null;
+
+  await writeManifest(dir, {
+    name: s.name,
+    url: s.url,
+    engine: ENGINE_SS,
+    enhanceLevel: level,
+    agent: s.agent || null,
+    include: s.include,
+    max: s.max,
+    createdAt: manifest.createdAt || new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+    via: ENGINE_SS,
+    pages: next,
+  });
+
+  return { mode: ENGINE_SS, stats, failures, pages: Object.keys(next).length, produced, note };
+}
+
+// ================= run：按引擎分派 =================
+
+async function runOne(s, { rebuild, engine }) {
+  const eng = engineOf(s, engine);
+  const dir = sourceDirOf(s.name);
+  const r =
+    eng === ENGINE_SS ? await runOneViaSkillSeekers(s, { rebuild }) : await runOneViaNode(s, { rebuild });
+
   const now = new Date().toISOString();
   await mutateStore((store) => {
     const rec = store.crawl.sources.find((x) => x.name === s.name);
     if (rec) {
       rec.lastRunAt = now;
-      rec.pages = Object.keys(next).length;
-      rec.failed = stats.failed;
-      rec.via = mode;
+      rec.pages = r.pages;
+      rec.failed = r.stats.failed;
+      rec.via = r.mode;
+      rec.engine = eng;
       rec.include = s.include;
       rec.max = s.max;
     }
     // 抓下来的目录**自动登记为知识库**（与手动 kb add 的结果完全同构）。
     // 有内容才登记：空目录进列表只会让人困惑。
-    if (produced > 0 && !store.kb.vaults.some((v) => resolve(String(v.path)) === resolve(dir))) {
+    if (r.produced > 0 && !store.kb.vaults.some((v) => resolve(String(v.path)) === resolve(dir))) {
       store.kb.vaults.push({ path: dir, name: s.name, model: null, addedAt: now });
     }
     return store.crawl.sources;
@@ -446,17 +707,24 @@ async function runOne(s, { rebuild }) {
     name: s.name,
     url: s.url,
     dir,
-    via: mode,
-    pages: Object.keys(next).length,
-    changes: { added: stats.added, updated: stats.updated, unchanged: stats.unchanged, skipped: stats.skipped },
-    failed: stats.failed,
-    failures: failures.slice(0, 20),
+    engine: eng,
+    via: r.mode,
+    enhanceLevel: Number.isInteger(s.enhanceLevel) ? s.enhanceLevel : 0,
+    pages: r.pages,
+    changes: r.stats,
+    failed: r.stats.failed,
+    failures: r.failures.slice(0, 20),
+    note: r.note || null,
     registered: true,
     hint: `跑 ${APP_NAME} index --root "${dir}" 把抓到的内容加进索引`,
   };
 }
 
-export async function run({ name, rebuild = false } = {}) {
+export async function run({ name, rebuild = false, engine } = {}) {
+  if (engine !== undefined && engine !== null && engine !== '' && !ENGINES.includes(String(engine))) {
+    throw badInput(`--engine 只能是 ${ENGINES.join(' | ')}，收到: ${engine}`);
+  }
+
   const sources = await storedSources();
   if (!sources.length) {
     throw badInput(`还没有采集源 —— 先跑 ${APP_NAME} crawl add <url> --name <名>`);
@@ -469,7 +737,7 @@ export async function run({ name, rebuild = false } = {}) {
 
   // 串行：与 index 同样的理由——并发抓同一站点既不礼貌，日志也会交错。
   const results = [];
-  for (const s of targets) results.push(await runOne(s, { rebuild: !!rebuild }));
+  for (const s of targets) results.push(await runOne(s, { rebuild: !!rebuild, engine }));
 
   return {
     status: 'ok',
@@ -482,7 +750,7 @@ export async function run({ name, rebuild = false } = {}) {
       added: results.reduce((n, r) => n + r.changes.added, 0),
       updated: results.reduce((n, r) => n + r.changes.updated, 0),
       unchanged: results.reduce((n, r) => n + r.changes.unchanged, 0),
-      failed: results.reduce((n, r) => n + r.failed, 0),
+      failed: results.reduce((n, r) => n + r.changes.failed, 0),
     },
   };
 }

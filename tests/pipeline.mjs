@@ -23,6 +23,7 @@
 //   P12 采集内容可检索   index + query        → 抓下来的词能命中、能读到原文
 //   P13 采集移除         crawl remove         → 默认保留文件与知识库登记；--purge 连目录删
 //   P14 守护（watch）     watch（常驻）        → 写一篇新笔记，不手动 index 也能检索到
+//   P15 外部引擎          crawl add + run      → skill-seekers 后端全链路（假引擎，不联网）
 //
 // 隔离：临时 store + 临时 skills 目录 + 临时 vault，绝不碰用户的真实数据。
 // （采集产物目录跟着 store 走，见 core/paths.js 的 sourcesDir()——所以隔离是全覆盖的。）
@@ -363,8 +364,12 @@ test('流水线：skill 安装 → 建库 → 建索引 → 检索 → 增量 �
     const site = await startDocSite();
     t2.after(() => site.close());
 
-    const add = await runJson(['crawl', 'add', site.base, '--name', 'localdocs', '--json'], env);
+    const add = await runJson(
+      ['crawl', 'add', site.base, '--name', 'localdocs', '--engine', 'node', '--json'],
+      env
+    );
     assert.equal(add.name, 'localdocs');
+    assert.equal(add.engine, 'node', '显式指定的引擎应原样回读');
     assert.equal(add.max, 200, '默认上限 200 页');
 
     // 登记后还没抓 → 0 页
@@ -372,9 +377,14 @@ test('流水线：skill 安装 → 建库 → 建索引 → 检索 → 增量 �
     assert.equal(before.count, 1);
     assert.equal(before.sources[0].pages, 0);
     assert.equal(before.sources[0].registered, false);
+    assert.equal(before.sources[0].engine, 'node', '引擎要能从 store 里读回来');
 
+    // 注意这里**没有**再传 --engine：默认引擎是 skill-seekers（外部），而本用例的底线是
+    // 「不联网可复现」——绝不能因为默认值变了就去调 Python / 拉依赖。
+    // 不传也顺带验证了「源的引擎真的存进了 store，并被 run 采纳」。
     const r = await runJson(['crawl', 'run', '--name', 'localdocs', '--json'], env, { timeoutMs: 120_000 });
     const res = r.results[0];
+    assert.equal(res.engine, 'node', '未传 --engine 时应采纳源上存着的引擎');
     assert.equal(res.via, 'sitemap', '本地站带 sitemap.xml，应走 sitemap 发现');
     assert.equal(res.pages, 3);
     assert.equal(res.changes.added, 3, '三页都应是新增');
@@ -407,7 +417,8 @@ test('流水线：skill 安装 → 建库 → 建索引 → 检索 → 增量 �
     const site = await startDocSite();
     t2.after(() => site.close());
 
-    await runJson(['crawl', 'add', site.base, '--name', 'inc', '--json'], env);
+    // 同样钉死内置引擎：这条用例只关心增量语义，不该被外部引擎的默认值带进网络与 Python。
+    await runJson(['crawl', 'add', site.base, '--name', 'inc', '--engine', 'node', '--json'], env);
     const first = await runJson(['crawl', 'run', '--name', 'inc', '--json'], env, { timeoutMs: 120_000 });
     assert.equal(first.results[0].changes.added, 3);
 
@@ -471,6 +482,87 @@ test('流水线：skill 安装 → 建库 → 建索引 → 检索 → 增量 �
 
     const r3 = await runJson(['crawl', 'list', '--json'], env);
     assert.equal(r3.count, 0);
+  });
+
+  // ---- 外部引擎（Skill Seekers）：用假引擎验证整条链路，全程离线 ----
+  //
+  // 真跑 skill-seekers 要联网拉约 50 MB 依赖、还要求 Python 3.10+ —— 那会捅破
+  // 「CI 不联网可复现」的底线。但这条链路（spawn → 产出目录 → 摘 md → 增量 → 登记知识库）
+  // 是**真实的代码路径**，必须有测试盯着，所以用 NX_KN_SKILL_SEEKERS_CMD 指向假引擎。
+  // 假引擎只模拟真实引擎唯一被我们依赖的行为：把产物落在 <cwd>/output/<name>/ 下。
+
+  await t.test('P15 外部引擎：skill-seekers 后端把产出摘成 markdown 并自动登记（假引擎，不联网）', async () => {
+    const fake = join(ROOT, 'tests', 'fixtures', 'fake-skill-seekers.mjs');
+    assert.ok(existsSync(fake), `缺假引擎 fixture: ${fake}`);
+    const ssEnv = { ...env, NX_KN_SKILL_SEEKERS_CMD: JSON.stringify([process.execPath, fake]) };
+
+    const add = await runJson(
+      ['crawl', 'add', 'https://example.invalid/docs/', '--name', 'ssdocs', '--engine', 'skill-seekers', '--json'],
+      ssEnv
+    );
+    assert.equal(add.engine, 'skill-seekers');
+    assert.equal(add.enhanceLevel, 0, '增强级别默认 0 = 纯抓取，不调任何 LLM');
+
+    const r = await runJson(['crawl', 'run', '--name', 'ssdocs', '--json'], ssEnv, { timeoutMs: 120_000 });
+    const res = r.results[0];
+    assert.equal(res.engine, 'skill-seekers');
+    assert.equal(res.via, 'skill-seekers');
+    assert.equal(res.pages, 2, '假引擎产出 SKILL.md + references/guide.md 两个 md');
+    assert.equal(res.changes.added, 2);
+    assert.equal(res.failed, 0);
+
+    // 落盘：md 摘进来，非 md（scripts-search.py）不摘
+    const dir = res.dir;
+    assert.ok(existsSync(join(dir, 'SKILL.md')), `应落盘: ${join(dir, 'SKILL.md')}`);
+    assert.ok(existsSync(join(dir, 'references', 'guide.md')));
+    assert.ok(!existsSync(join(dir, 'scripts-search.py')), '非 markdown 的产物不该进知识库');
+    const ref = readFileSync(join(dir, 'references', 'guide.md'), 'utf8');
+    assert.match(ref, /skseeker-ref-word/, '外部引擎产出的内容应原样保留');
+    assert.match(ref, /^---\nsource: /, '外部引擎的产出也应补上来源 frontmatter');
+
+    // 自动登记为知识库（与内置引擎完全同构）
+    const kb = await runJson(['kb', 'list', '--json'], ssEnv);
+    assert.ok(
+      kb.vaults.some((v) => resolve(v.path) === resolve(dir)),
+      '外部引擎的产出也应自动登记为知识库'
+    );
+
+    // 增量：内容未变 → 0 重写
+    const again = await runJson(['crawl', 'run', '--name', 'ssdocs', '--json'], ssEnv, { timeoutMs: 120_000 });
+    const c2 = again.results[0].changes;
+    assert.equal(c2.added, 0, '没改动不该新增');
+    assert.equal(c2.updated, 0, '内容哈希一致时不该重写');
+    assert.equal(c2.unchanged, 2);
+
+    // list 里要能看到引擎（面板与 CLI 都靠它说明「这个源是怎么抓的」）
+    const l = await runJson(['crawl', 'list', '--json'], ssEnv);
+    const row = l.sources.find((s) => s.name === 'ssdocs');
+    assert.equal(row.engine, 'skill-seekers');
+
+    // 收尾：连目录与知识库登记一起撤掉，别给后面的守护用例留下额外状态
+    await runJson(['crawl', 'remove', 'ssdocs', '--purge', '--json'], ssEnv);
+  });
+
+  await t.test('P15b 外部引擎：命令不存在时报错并指出两条出路（绝不静默回落）', async () => {
+    const ssEnv = { ...env, NX_KN_SKILL_SEEKERS_CMD: join(tmpdir(), 'nx-kn-no-such-ss-bin') };
+
+    await runJson(
+      ['crawl', 'add', 'https://example.invalid/x/', '--name', 'ssfail', '--engine', 'skill-seekers', '--json'],
+      ssEnv
+    );
+
+    await assert.rejects(
+      () => runJson(['crawl', 'run', '--name', 'ssfail', '--json'], ssEnv, { timeoutMs: 60_000 }),
+      (err) => {
+        const out = `${err.stdout || ''}${err.stderr || ''}${err.message || ''}`;
+        assert.match(out, /skill-seekers/, '错误里要点明是哪一步失败');
+        assert.match(out, /--engine node/, '要给出「换内置引擎」这条出路');
+        return true;
+      },
+      '默认引擎是外部的，但装不上时必须**响亮失败**并给出替代方案，而不是悄悄换个引擎跑'
+    );
+
+    await runJson(['crawl', 'remove', 'ssfail', '--purge', '--json'], ssEnv);
   });
 
   // ---- 阶段 4：守护（watch）。真起一个常驻进程，证明「不手动 index 也能检索到」。 ----

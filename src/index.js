@@ -11,6 +11,10 @@ export * as crawl from './modules/crawl/service.js';
 // 库用方想复用「抓一个页面并清洗」时不必自己重写一遍。
 export * as web from './core/web.js';
 
+// Skill Seekers 的进程驱动（候选命令解析 + spawn + 可用性探测）同样导出：
+// 库用方要自己编排这个外部引擎时，不必重新踩一遍「URL 里的 % 不能过 shell」这些坑。
+export * as skillSeekers from './core/skill-seekers.js';
+
 export { ACTIONS, MODULES } from './runtime/registry.js';
 export { startServer } from './runtime/server.js';
 export { runCli } from './runtime/cli.js';

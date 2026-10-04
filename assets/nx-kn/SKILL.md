@@ -1,6 +1,6 @@
 ---
 name: nx-kn
-description: 当需要检索本机 Obsidian 知识库（笔记全文 / 语义搜索）、建立或更新索引、增减知识库目录、查看索引状态，或把 vault 之外的**文档站**抓下来入知识库时使用。触发词：知识库、笔记、检索、搜索、召回、Obsidian、vault、索引、query、index、多个库、添加目录、抓取文档站、爬虫、资料采集、crawl、离线文档。不适用：需要 LLM 问答或摘要（本工具只召回、不生成）；需要登录/验证码或必须靠 JS 渲染的站点。
+description: 当需要检索本机 Obsidian 知识库（笔记全文 / 语义搜索）、建立或更新索引、增减知识库目录、查看索引状态，或把 vault 之外的**文档站**抓下来入知识库时使用。触发词：知识库、笔记、检索、搜索、召回、Obsidian、vault、索引、query、index、多个库、添加目录、抓取文档站、爬虫、资料采集、crawl、离线文档、抓取引擎、skill-seekers。不适用：需要 LLM 问答或摘要（本工具只召回、不生成）。注意：采集默认使用外部引擎 Skill Seekers（需本机 Python 3.10+ 与 uv），离线或纯静态场景可加 `--engine node` 改用内置引擎。
 ---
 
 # nx-kn
@@ -28,6 +28,9 @@ CLI 与 Web 面板共享同一份 action 声明。需要时还能把**文档站�
    清洗成 `<数据目录>/sources/<名>/**/*.md`，然后**当作一个知识库登记**。
    于是索引 / 检索 / 增量 / 多库合并全部复用 kb 域，采集只负责「URL → 干净 markdown」。
    抓完还要跑一次 `nx-kn index` 才进索引。
+   **两条引擎在做同一件事**（`--engine` 选）：默认 `skill-seekers`（外部进程，抓取与分类
+   全交给它，需本机 Python 3.10+ 与 uv），可切 `node`（内置纯 Node，零额外依赖，只收静态
+   HTML）。引擎差异**只到落盘为止**——两者产出的都是同一形状的 markdown 目录，后续共用。
 6. **守护不自己实现增量，只挑时机**——`watch` 复用 `index` 那条路（zg 的 `index` 本就是
    增量），它唯一的本职是「在笔记变了的时候把索引叫起来」。守护**逐个目录**挂 watcher，
    排除目录（`.obsidian/` 本机 325 篇 md、`.zvec-grep/` 自己写盘）**根本不进监听范围**
@@ -45,8 +48,8 @@ CLI 与 Web 面板共享同一份 action 声明。需要时还能把**文档站�
 | `nx-kn index [--rebuild] [--model M] [--types md,txt] [--root 路径]` | 对**全部库**建 / 增索引（默认只收 md）；不带 `--rebuild` 即**增量**；**换模型必须叠加 `--rebuild`** |
 | `nx-kn query "<问句>" [--limit N] [--preview none\|short\|full] [--root 路径]` | 跨全部库混合检索，按融合分合并；输出 `[库名] 相对路径:行号` + 片段 |
 | `nx-kn status` | zg 可用性 / 各库笔记数 / 索引覆盖度 / 生效模型 |
-| `nx-kn crawl add <url> [--name N] [--match glob] [--max N]` | 登记一个**文档站**采集源（只登记不抓） |
-| `nx-kn crawl run [--name N] [--rebuild]` | 抓取并清洗成 markdown；默认增量（内容未变的页面不重写） |
+| `nx-kn crawl add <url> [--name N] [--engine E] [--enhance-level 0-3] [--agent A] [--match glob] [--max N]` | 登记一个**文档站**采集源（只登记不抓）。`E` = `skill-seekers`（默认，外部引擎）或 `node`（内置） |
+| `nx-kn crawl run [--name N] [--engine E] [--rebuild]` | 抓取并清洗成 markdown；默认增量（内容未变的页面不重写）。`--engine` 可临时覆盖源上存的引擎 |
 | `nx-kn crawl list` | 采集源列表 + 上次抓取时间 / 页数 / 失败数 |
 | `nx-kn crawl remove <name> [--purge]` | 解登记（默认保留抓下来的文件与知识库登记；`--purge` 连目录一起删） |
 | `nx-kn watch [--debounce ms]` | **守护**：常驻监听各库，笔记一变就自动增量索引（Ctrl+C 停）。改完笔记要立刻搜到就用它 |
@@ -118,7 +121,12 @@ CLI 与 Web 面板共享同一份 action 声明。需要时还能把**文档站�
 
 要点：
 
-- **静态 HTML 站才支持**：优先 sitemap，回退同域 BFS；只抓同源；串行 + 节流
+- **默认引擎是外部 `skill-seekers`**（需本机 Python 3.10+ 或 uv；PATH 上没有就经
+  `uvx` 免安装拉起，首次联网拉约 50 MB）。**机器上没有 Python / 要离线抓取时加
+  `--engine node`** 用内置纯 Node 引擎——`crawl add` 与 `crawl run` 都接受该开关，
+  前者把引擎存进源，后者只临时覆盖
+- 引擎起不来时**直接报错并给两条出路**（装它 / `--engine node`），绝不静默换引擎
+- **静态 HTML 站才支持**：优先 sitemap，回退同域 BFS；只抓同源；串行 + 节流（node 引擎）
 - **增量靠内容哈希**：`crawl run` 重跑时内容没变的页面不写盘，后续索引如实报 `unchanged`
 - 抓取范围（`--match` / `--max`）在 `crawl add` 时定；要改就 `crawl remove` 后重新 `crawl add`
 - 删数据用 `nx-kn crawl remove <名> --purge`（不带 `--purge` 只解登记，文件留着）

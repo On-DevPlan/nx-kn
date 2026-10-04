@@ -4,6 +4,34 @@
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-10-04
+
+### Changed — 采集默认引擎改为外部 `skill-seekers`，纯 Node 实现保留为内置引擎
+
+- `crawl` 域引入**双引擎**（用户决策）：
+  - **默认引擎 = `skill-seekers`**（外部 Python 进程，[Skill Seekers](https://github.com/yusufkaraaslan/Skill_Seekers)）。
+    调用经 `spawn(bin, argsArray)`、**不经 shell**——URL 天然带 `%`（`%20` 等），任何
+    shell 垫片都会二次解释参数，数组直达则无此问题。候选链：环境变量
+    `NX_KN_SKILL_SEEKERS_CMD`（唯一、不回退）→ PATH 上的 `skill-seekers` →
+    `uvx --from skill-seekers skill-seekers`（免安装，首次联网拉约 50 MB）。
+  - **内置纯 Node 引擎保留**为 `--engine node`（原 0.2.0 的实现原样可用）——
+    npm 包依旧零强制依赖，没有 Python 的机器开箱可用。
+  - **失败不静默回落**：默认引擎起不来就报错并给两条出路（装它 / `--engine node`）。
+    进程真的跑起来后的非 0 退出是业务失败，换候选重跑无意义。
+  - `crawl add --enhance-level 0-3`（默认 0 = 纯抓取不调 LLM）与 `--agent`
+    透传给 skill-seekers；`--match` 在两个引擎的落盘文件名空间上语义一致。
+  - skill-seekers 在系统临时 scratch 目录里跑，只把 `.md` 摘进 `sources/<名>/`
+    （SQLite 索引、缓存等中间产物不进知识库）；增量仍按正文内容哈希，与内置引擎同一套清单。
+  - 面板「资料采集」添加源对话框支持引擎与增强级别选择。
+
+### Fixed
+
+- **子进程驱动在 Windows 上会让宿主进程白挂到超时**：曾用 `spawn` 的 `timeout` 选项，
+  实测（Node 22 / Windows）ENOENT 路径上该选项把事件循环钉住到超时才放——
+  error 已触发、结果已返回，进程却多活 `timeoutMs`（默认 30 分钟）。改为**自己管超时**
+  （unref 定时器 + 击杀 + 各 settle 路径 clearTimeout），并新增「超时击杀（code 124）」
+  回归测试钉住。
+
 ## [0.2.1] - 2026-10-04
 
 ### Fixed — 守护在 Linux 上会被索引自身打崩

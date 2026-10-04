@@ -85,6 +85,7 @@ export function Copyable({ text, className = '', title, children }) {
 //   确认   dialog({ title, message, okText })            → true | null
 //   单输入 dialog({ input: true, value, placeholder })   → string | null
 //   多输入 dialog({ fields: [{key,label,value,placeholder}] }) → { key: string } | null
+//          字段带 options（字符串数组或 {value,label}）时渲染成下拉 —— 枚举值用它，别让用户手打
 //
 // 为什么补多输入：加知识库要同时给「目录」和「embedding 模型」两个值，
 // 分两次弹窗会让中途取消留下半配置（目录加了、模型没给）。
@@ -130,15 +131,38 @@ export function useDialog() {
                   {state.fields.map((f, i) => (
                     <label className="dlg-field" key={f.key}>
                       {f.label ? <span className="dlg-field-label">{f.label}</span> : null}
-                      <input
-                        className="dlg-input"
-                        autoFocus={i === 0}
-                        spellCheck="false"
-                        placeholder={f.placeholder || ''}
-                        defaultValue={f.value || ''}
-                        onKeyDown={onKey}
-                        ref={(el) => { fieldRefs.current[i] = el; }}
-                      />
+                      {Array.isArray(f.options) ? (
+                        // 枚举值一律用下拉：让用户手打 `skill-seekers` 这种值，
+                        // 打错一个字母就换来一条看不懂的「参数非法」，而选项本来是可枚举的。
+                        // 提交逻辑统一读 `el.value`，select 与 input 同构，故共用同一个 ref。
+                        <select
+                          className="dlg-input"
+                          autoFocus={i === 0}
+                          defaultValue={f.value ?? (f.options[0] && (f.options[0].value ?? f.options[0]))}
+                          onKeyDown={onKey}
+                          ref={(el) => { fieldRefs.current[i] = el; }}
+                        >
+                          {f.options.map((o) => {
+                            const v = o && typeof o === 'object' ? o.value : o;
+                            const label = o && typeof o === 'object' ? o.label : o;
+                            return (
+                              <option key={v} value={v}>
+                                {label}
+                              </option>
+                            );
+                          })}
+                        </select>
+                      ) : (
+                        <input
+                          className="dlg-input"
+                          autoFocus={i === 0}
+                          spellCheck="false"
+                          placeholder={f.placeholder || ''}
+                          defaultValue={f.value || ''}
+                          onKeyDown={onKey}
+                          ref={(el) => { fieldRefs.current[i] = el; }}
+                        />
+                      )}
                     </label>
                   ))}
                 </div>

@@ -45,6 +45,13 @@ export function sourceDirOf(name) {
 // 刻意不带版本号：写死版本会随发版漂移，而无版本的 UA 已经足够表明身份。
 export const CRAWL_UA = 'nx-kn (+https://github.com/On-DevPlan/nx-kn)';
 
+// 抓取引擎。放在 core 而不是 crawl 模块里，是因为 store.js 的归一化也要用它补默认值，
+// 而 core 不允许依赖 modules —— 常量各写一份迟早漂移。
+//   node           内置，纯 Node（fetch + cheerio + turndown），零额外依赖
+//   skill-seekers  外部 Python 引擎，默认（见 docs/plan 的决策修正）
+export const CRAWL_ENGINES = ['node', 'skill-seekers'];
+export const DEFAULT_CRAWL_ENGINE = 'skill-seekers';
+
 // 相邻两次抓取的间隔（毫秒）。默认 300ms：串行 + 节流，不去打爆别人的站点。
 // 测试要快，用环境变量压到 0——这条逃生舱和 NX_KN_EMBEDDING 是同一个思路。
 export const CRAWL_DELAY_ENV = 'NX_KN_CRAWL_DELAY_MS';
