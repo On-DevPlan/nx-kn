@@ -30,7 +30,7 @@
 | 索引落盘 | **vault 内** `<vault>/.zvec-grep/` |
 | 能力范围 | **纯检索**（不含 LLM 问答、不含 wikilink/backlink 图谱） |
 | skill 交付 | `nx-kn skill install` 装到 **`~/.claude/skills`**（同 nx-rp；骨架 A04 / B04 规范） |
-| 外部资料采集 | **v0.2 预留**：只借 Skill Seekers 思路，Node → Python 子进程 stdio（按 B05 标准） |
+| 外部资料采集 | 原为「v0.2 预留：只借 Skill Seekers 思路，Node → Python 子进程 stdio（按 B05 标准）」→ **2026-10-04 改判**：**阶段 5 已实现，纯 Node**（内置 `fetch` + cheerio/turndown，**无子进程**）；Skill Seekers 仅作**参考实现阅读**，不是依赖 |
 | 执行节奏 | **先出计划，执行等确认** |
 
 ### 架构图对齐（第二轮确认，2026-10-03 22:55）
@@ -43,7 +43,7 @@
 | 2. obsidian 兼容 | vault 原位读取 + 排除/噪声处理 | 阶段 2 |
 | 3. obsidian 的 skill 作为子 skill 可安装 | `nx-kn skill install` → `~/.claude/skills` | 阶段 3 |
 | 4. zg 项目 → boot → nx-rp 里有案例 → zg-cli → 需要向量 api | onboard 流程照抄 `nx-rp/src/modules/doc/zg.js`；需 qwen key | 阶段 0 / 2 |
-| 5. skill-seeker → 一丢丢爬虫参考 → python 的子进程 → B05 subprocess stdio / rt 的 python 部分 | **v0.2 预留**：参考 [Skill Seekers](https://github.com/yusufkaraaslan/Skill_Seekers)（Python，18 种数据源 → 知识资产，自带 stdio 模式 MCP）；调用规范按 `B05-multi-line-cli-input`；Python 实践参考 rt 项目 `backend/src/rt_backend/` | 阶段 5 |
+| 5. skill-seeker → 一丢丢爬虫参考 → python 的子进程 → B05 subprocess stdio / rt 的 python 部分 | **已落地（阶段 5，2026-10-04）**：借 [Skill Seekers](https://github.com/yusufkaraaslan/Skill_Seekers)（Python，18 种数据源 → 知识资产，自带 stdio 模式 MCP）的抓取与清洗**思路**——**仅阅读参考，不作为依赖**；但图中「python 的子进程」这一环**未采纳**：已改判**纯 Node**，故 `B05-multi-line-cli-input` 的多行 CLI 协议与 rt 的 Python 部分**均不进主干**（理由见本文阶段 5「决策修正」表与 spec 的 D1） | 阶段 5 |
 | 背景：nx-rp ｜ 最后效果：像 rp 一样支持对整体知识库的检索 | 目标一句话的出处 | §0 |
 
 ---
