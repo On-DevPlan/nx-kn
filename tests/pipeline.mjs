@@ -22,13 +22,14 @@
 //   P11 采集增量         crawl run            → 内容未变 0 重写；改一页只重写该页
 //   P12 采集内容可检索   index + query        → 抓下来的词能命中、能读到原文
 //   P13 采集移除         crawl remove         → 默认保留文件与知识库登记；--purge 连目录删
+//   P14 守护（watch）     watch（常驻）        → 写一篇新笔记，不手动 index 也能检索到
 //
 // 隔离：临时 store + 临时 skills 目录 + 临时 vault，绝不碰用户的真实数据。
 // （采集产物目录跟着 store 走，见 core/paths.js 的 sourcesDir()——所以隔离是全覆盖的。）
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
-import { execFile } from 'node:child_process';
+import { execFile, spawn } from 'node:child_process';
 import { promisify } from 'node:util';
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -62,6 +63,20 @@ async function runJson(args, env, opts) {
   return JSON.parse(stdout);
 }
 
+// 轮询等待：谓词返回真值即返回它，超时则抛出（带上上下文，方便看进程输出）。
+// 守护是**异步**的（文件事件 → 防抖 → 索引），只能等，不能假设「写完就绪」。
+async function waitFor(fn, { timeoutMs = 60_000, stepMs = 1000, dump } = {}) {
+  const t0 = Date.now();
+  for (;;) {
+    const v = await fn();
+    if (v) return v;
+    if (Date.now() - t0 > timeoutMs) {
+      throw new Error(`等待超时（${timeoutMs}ms）${dump ? `\n--- 上下文 ---\n${dump()}` : ''}`);
+    }
+    await new Promise((r) => setTimeout(r, stepMs));
+  }
+}
+
 const NOTE_A = `---
 title: 登录超时排查
 tags: [auth, 登录]
@@ -85,6 +100,13 @@ const NOTE_C = `# 标签视图主题化
 const NOTE_D = `# 打包发布流程
 
 先用 pnpm build，再跑 npm publish。打 tag 之前先确认版本号。
+`;
+
+// 守护测试专用：关键词在别处（含 crawl 抓下来的页面）都不出现，
+// 一旦检索到它就只可能是「守护把这篇新笔记写进了索引」。
+const NOTE_W = `# 守护自动索引
+
+守护监听到这篇新笔记后应当自动建索引。它独有的词是「鲸落守护」。
 `;
 
 // ---- 本地「文档站」：采集链路测试用它代替真实站点 ----
@@ -449,5 +471,73 @@ test('流水线：skill 安装 → 建库 → 建索引 → 检索 → 增量 �
 
     const r3 = await runJson(['crawl', 'list', '--json'], env);
     assert.equal(r3.count, 0);
+  });
+
+  // ---- 阶段 4：守护（watch）。真起一个常驻进程，证明「不手动 index 也能检索到」。 ----
+
+  await t.test('P14 守护：起常驻 watch，写一篇新笔记就能检索到（无需手动 index）', async (t2) => {
+    // P9 / P13 把库都移除了，这里重新登记 vault A。
+    // 索引文件仍在磁盘上（kb remove 不删索引），所以守护只需补那一篇新笔记。
+    await runJson(['kb', 'add', vaultA, '--json'], env);
+
+    const before = await runJson(['query', '鲸落守护', '--json'], env);
+    assert.ok(
+      !before.hits.some((h) => h.path === 'watch-new.md'),
+      '守护之前不该有这篇笔记的索引'
+    );
+
+    // 真起**常驻进程**而不是直接调函数：这样连「命令面 + 进程生命周期」一起验，
+    // 也才叫「装完 skill 之后这件事能自动做完」。
+    const child = spawn(process.execPath, [BIN, 'watch'], {
+      cwd: tmpdir(),
+      // 防抖压到 200ms：默认 1500ms 是给真人打字用的，测试里白等
+      env: { ...process.env, ...env, NX_KN_WATCH_DEBOUNCE_MS: '200' },
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    let out = '';
+    child.stdout.on('data', (c) => { out += c; });
+    child.stderr.on('data', (c) => { out += c; });
+    const stop = () => { try { child.kill(); } catch { /* 已退出 */ } };
+    t2.after(stop);
+
+    try {
+      // P14a 启动：常驻命令要先能起来并报出监听的库
+      await waitFor(() => /守护已启动/.test(out), {
+        timeoutMs: 30_000,
+        stepMs: 200,
+        dump: () => out,
+      });
+
+      // P14b 触发：往已登记的库里写一篇新笔记，**不跑任何 index 命令**
+      writeFileSync(join(vaultA, 'watch-new.md'), NOTE_W, 'utf8');
+
+      // P14c 等守护自己报「已增量更新」。
+      //
+      // 这一步刻意**不用 `query` 轮询**：zg 的 query 会在这个 workspace 上取得读锁、
+      // 还可能触发它自己的后台刷新，于是守护那侧的 `zg index` 会撞上
+      // `ZVEC_GREP.ENGINE.LOCK.BUSY`（实测踩过）。等守护的日志既不碰索引，也更直接——
+      // 它证明的正是「守护把这次改动自己处理掉了」。
+      await waitFor(() => /已增量更新/.test(out), {
+        timeoutMs: 120_000,
+        stepMs: 500,
+        dump: () => out,
+      });
+
+      // P14d 收效：此刻再检索一次，必须命中这篇「从没手动索引过」的笔记
+      const hit = await waitFor(
+        async () => {
+          const r = await runJson(['query', '鲸落守护', '--json'], env, { timeoutMs: 120_000 });
+          return r.hits.find((h) => h.path === 'watch-new.md') || null;
+        },
+        { timeoutMs: 30_000, stepMs: 2000, dump: () => out }
+      );
+
+      // 与 P5 同样的落点：agent 拼出的绝对路径必须真能读到原文
+      const abs = join(hit.vault, hit.path);
+      assert.ok(existsSync(abs), `按提示拼出的路径不存在: ${abs}`);
+      assert.match(readFileSync(abs, 'utf8'), /鲸落守护/);
+    } finally {
+      stop();
+    }
   });
 });

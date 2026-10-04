@@ -17,6 +17,9 @@ action 声明（`src/modules/*/index.js`），一条命令三端同源——CLI�
 需要时还能把 **vault 之外的文档站抓下来**：`crawl run` 把静态 HTML 清洗成 markdown、
 落成普通目录并**自动登记为知识库**，于是索引 / 检索 / 增量 / 多库合并全部复用 kb 域。
 
+索引也可以**自动跟上**：`nx-kn watch` 常驻监听各库，笔记一变就自动跑增量索引；
+`nx-kn serve` 起的面板里**默认已开**这道守护，面板上能看最近刷新、随手开关。
+
 | | |
 | --- | --- |
 | CLI 命令表 | `nx-kn help`（或 `routes` 看命令 ↔ 路由对照） |
@@ -57,11 +60,11 @@ agent 拿到后可以拼出绝对路径去读全文。`--json` 给结构化 `hit
 
 ```
 src/
-├─ core/      基础设施：paths（参数化中心）/ errors / store（JSON 持久化）/ zg（召回引擎驱动）/ web（HTML→markdown 等纯函数）/ open
+├─ core/      基础设施：paths（参数化中心）/ errors / store（JSON 持久化）/ zg（召回引擎驱动）/ web（HTML→markdown 等纯函数）/ watch（文件监听基元）/ open
 ├─ modules/   功能域，各含 index.js（action 声明）+ service.js（业务）+ view.jsx（面板）
 │   ├─ home/       示例域（读路径）
 │   ├─ settings/   示例域（写路径：面板表单 → POST → mutateStore → CLI 同源可读）
-│   ├─ kb/         知识库域：kb add / kb remove / kb list + index / query / status
+│   ├─ kb/         知识库域：kb add / kb remove / kb list + index / query / status + watch（守护）
 │   └─ crawl/      资料采集域：crawl add / run / list / remove（抓文档站 → markdown → 当知识库）
 ├─ runtime/   装配：registry（action 汇合）/ cli / api / server / spec
 └─ web/       React 面板壳（vite 构建，产物被零依赖 node:http 服务）

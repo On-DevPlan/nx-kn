@@ -58,6 +58,26 @@ export function crawlDelayMs() {
   return 300;
 }
 
+// ---- 守护（watch）----
+//
+// 监听已登记的库，笔记一变就自动跑增量索引。这里只放「防抖窗口」这一个参数。
+//
+// 默认 1500ms 而不是更短：Obsidian 保存一篇笔记会连发多个事件（写临时文件 + 改名），
+// 键盘停顿前的自动保存也是独立事件流。窗口太短会把一次编辑拆成好几次索引，
+// 每次都得起一个 zg 子进程；太长则「改完等半天才搜得到」。
+//
+// 测试要快，用环境变量压到几百毫秒甚至 0——与 NX_KN_CRAWL_DELAY_MS 同一个思路。
+export const WATCH_DEBOUNCE_ENV = 'NX_KN_WATCH_DEBOUNCE_MS';
+
+export function watchDebounceMs() {
+  const v = process.env[WATCH_DEBOUNCE_ENV];
+  if (v !== undefined && String(v).trim() !== '') {
+    const n = Number(v);
+    if (Number.isFinite(n) && n >= 0) return n;
+  }
+  return 1500;
+}
+
 
 // ---- 端口 ----
 // serve 的 HTTP 端口。vite dev server 的端口在 vite.config.js 里单独配。

@@ -43,6 +43,7 @@
 | **B3** | 部分修：`index` 会对比「已建索引实际生效的模型」与请求模型，不一致且无 `--rebuild` 时直接拒绝；`hasIndex` 本身仍只判目录存在 | `service.js` `indexOne` |
 | **B4** | 已修：面板拆成「更新索引」（增量）与「重建索引」（全量，二次确认） | `modules/kb/view.jsx` |
 | **B5** | 已修：添加目录时收集模型（默认 `local/qwen3-embedding-0.6b`），`index` 亦有内置默认兜底 | `view.jsx`、`core/paths.js` |
+| **W1** | **已实现守护**（原 §0 结论速览里阶段 4 的 🟡 项）：`nx-kn watch` 前台常驻 / `serve` 进程内默认开启（`--no-watch` 可关）/ 面板「守护」开关 + 最近刷新；`watch status`（`GET /api/kb/watch`）单独一条轻量路由。只做「触发」，索引仍走 `index` | `core/watch.js`、`modules/kb/watch.js`、`runtime/cli.js`、`modules/kb/view.jsx`；单测 `tests/unit/watch.test.mjs` + 流水线 P14 |
 
 ---
 

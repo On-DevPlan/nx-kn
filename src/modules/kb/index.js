@@ -7,7 +7,16 @@
 //
 // 多库下的命令面：kb add / kb remove / kb list 管「有哪些库」，
 // index / query / status 管「对全部库做一件事」（--root 可缩到单个库）。
+//
+// watch 是「守护」：两种形态共用一条 action 声明——
+//   CLI `nx-kn watch`       前台常驻，Ctrl+C 停（transport = cli 且没给 --on/--off）
+//   HTTP POST /api/kb/watch 开/关 serve 进程内的守护（面板开关）
+// 之所以敢让一条 action 出两种行为：它们本来就是同一件事的两副面孔
+// （「把守护开起来」），靠 transport 区分，比硬拆成两条各自半份声明更不易漂移。
+// 另有一条 `kb.watchStatus`（读）单独报状态——轻量、不碰 zg，
+// 面板才能高频轮询它而不像 status 那样每轮都去起 zg 子进程。
 import * as service from './service.js';
+import * as watch from './watch.js';
 import { APP_NAME } from '../../core/paths.js';
 
 function kbHint(cmd) {
@@ -222,6 +231,63 @@ export default {
           if (v.hint) lines.push(`    ${v.hint}`);
         }
         if (r.hint) lines.push('', `提示      ${r.hint}`);
+        return lines.join('\n');
+      },
+    },
+    {
+      id: 'kb.watch',
+      cli: [['watch'], ['kb', 'watch']],
+      http: ['POST', '/api/kb/watch'],
+      summary:
+        '守护：监听已登记库，笔记一变就自动增量索引（CLI 前台常驻、Ctrl+C 停；--on/--off 或面板则开关 serve 内的守护）',
+      flags: {
+        on: { type: 'boolean' },
+        debounce: { type: 'number', hint: '毫秒' },
+      },
+      run: (ctx, meta) => {
+        const http = meta?.transport === 'http';
+        // CLI 不给 --on/--off = 前台常驻；给了，或走 HTTP = 开关。
+        // 判据是「有没有表达开关意图」，而不是「是不是 HTTP」——
+        // 这样 `nx-kn watch --off` 也能在脚本里按意图表达，不至于莫名其妙挂住终端。
+        if (http || ctx.on !== undefined) {
+          return ctx.on === false
+            ? Promise.resolve(watch.stopWatch())
+            : watch.startWatch({ debounceMs: ctx.debounce, source: http ? 'serve' : 'cli' });
+        }
+        return watch.runWatchForeground({ debounceMs: ctx.debounce });
+      },
+      render: (r) => {
+        if (!r.running) {
+          return `守护已停止 —— 笔记改动不再自动进索引，需要手动跑 ${kbHint('index')}`;
+        }
+        const lines = [
+          `守护运行中 —— 监听 ${r.vaults.length} 个库（防抖 ${r.debounceMs}ms · 来源 ${r.source}）`,
+        ];
+        for (const v of r.vaults) lines.push(`  [${v.name}] ${v.path}${v.error ? `   ⚠ ${v.error}` : ''}`);
+        lines.push(`  已刷新 ${r.runs} 次 · 错误 ${r.errors} 次`);
+        return lines.join('\n');
+      },
+    },
+    {
+      id: 'kb.watchStatus',
+      cli: [['watch', 'status'], ['kb', 'watch', 'status']],
+      http: ['GET', '/api/kb/watch'],
+      summary: '查看守护状态（是否在跑、监听哪些库、最近刷新记录）',
+      run: () => watch.watchState(),
+      render: (r) => {
+        if (!r.running) {
+          return `守护未运行 —— 跑 ${kbHint('watch')} 常驻监听，或在 ${kbHint('serve')} 的面板上打开开关`;
+        }
+        const lines = [`守护运行中（来源 ${r.source} · 防抖 ${r.debounceMs}ms · 启动于 ${r.startedAt}）`];
+        for (const v of r.vaults) {
+          const last = v.lastAt ? `最近 ${v.lastAt}` : '还没刷新过';
+          const ch = v.lastChanges
+            ? `${v.lastChanges.added ?? 0} 新增 / ${v.lastChanges.modified ?? 0} 改动`
+            : '';
+          lines.push(`  [${v.name}] ${v.path}`);
+          lines.push(`      ${v.busy ? '索引中…' : last}${ch ? `（${ch}）` : ''}${v.error ? `  ⚠ ${v.error}` : ''}`);
+        }
+        lines.push(`  共刷新 ${r.runs} 次 · 错误 ${r.errors} 次`);
         return lines.join('\n');
       },
     },

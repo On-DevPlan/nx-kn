@@ -30,11 +30,29 @@ function notesText(v) {
   );
 }
 
+// 守护一行字。刻意把「最近一次刷新」放在最前——用户打开面板最想知道的是
+// 「它刚才有没有帮我更新」，而不是「它监听了几个目录」。
+function watchText(w) {
+  if (!w || !w.running) {
+    return '未运行 —— 笔记改动不会自动进索引，需手动点「更新索引（增量）」。（serve 启动时默认开启）';
+  }
+  const last = (w.events || []).find((e) => e.type === 'indexed');
+  const lastTxt = last
+    ? `最近刷新 ${new Date(last.at).toLocaleTimeString('zh-CN', { hour12: false })}` +
+      (last.changes ? `（新增 ${last.changes.added ?? 0} / 改动 ${last.changes.modified ?? 0}）` : '')
+    : '还没刷新过';
+  return (
+    `${lastTxt} · 监听 ${w.vaults.length} 个库 · 防抖 ${w.debounceMs}ms` +
+    ` · 累计 ${w.runs} 次${w.errors ? ` · 错误 ${w.errors} 次` : ''}`
+  );
+}
+
 export default function KbView() {
   const toast = useToast();
   const { dialog, node: dialogNode } = useDialog();
 
   const [st, setSt] = useState(null);
+  const [w, setW] = useState(null);
   const [q, setQ] = useState('');
   const [busy, setBusy] = useState('');
   const [res, setRes] = useState(null);
@@ -49,7 +67,25 @@ export default function KbView() {
     }
   }, []);
 
-  useEffect(() => { refresh(); }, [refresh]);
+  // 守护状态走**独立**的轻量接口（GET /api/kb/watch）：它只读内存里的会话，
+  // 不碰 zg。放进 status 会让每次轮询都逐库起一次 `zg status`（秒级），
+  // 于是「为了刷新一行守护状态」把面板拖垮——这正是当初拆开的原因。
+  const refreshWatch = useCallback(async () => {
+    try {
+      setW(await api('/api/kb/watch'));
+    } catch {
+      setW(null); // 守护状态拿不到不该影响检索那半边
+    }
+  }, []);
+
+  useEffect(() => { refresh(); refreshWatch(); }, [refresh, refreshWatch]);
+
+  // 跑着的时候才轮询：没跑时它不会自己变，白轮询只是浪费。
+  useEffect(() => {
+    if (!w?.running) return undefined;
+    const id = setInterval(refreshWatch, 3000);
+    return () => clearInterval(id);
+  }, [w?.running, refreshWatch]);
 
   async function search(e) {
     e?.preventDefault();
@@ -155,6 +191,19 @@ export default function KbView() {
     }
   }
 
+  async function toggleWatch(on) {
+    setBusy('watch');
+    try {
+      const out = await api('/api/kb/watch', { method: 'POST', body: { on } });
+      toast(out.running ? '守护已启动（笔记一变就自动更新索引）' : '守护已停止（需手动更新索引）');
+      await refreshWatch();
+    } catch (e) {
+      toast(String(e.message || e), 'bad');
+    } finally {
+      setBusy('');
+    }
+  }
+
   if (err) return <div className="empty bad">接口调用失败：{err}</div>;
 
   // st === null = 状态还没回来。此时绝不能把「未添加 / zg 未安装 / 未建」渲染出去：
@@ -226,6 +275,25 @@ export default function KbView() {
             </div>
           </div>
         ))}
+
+        {/* 守护：serve 进程内的后台监听。有库才显示——没库时它无论如何起不来 */}
+        {!loading && st.configured && (
+          <div className="row wrap">
+            <div className="name">守护</div>
+            <div className="acts">
+              {w?.running ? <span className="tag strong">运行中</span> : <span className="tag">已停止</span>}
+              <button
+                className="btn small ghost"
+                disabled={!!busy}
+                onClick={() => toggleWatch(!w?.running)}
+                title="监听已登记目录，笔记一变就自动跑增量索引"
+              >
+                {busy === 'watch' ? '…' : w?.running ? '停止' : '启动'}
+              </button>
+            </div>
+            <div className="desc">{watchText(w)}</div>
+          </div>
+        )}
 
         <div className="opt-actions">
           <button className="btn ghost" disabled={!!busy} onClick={addVault}>

@@ -20,7 +20,11 @@ const BUILTINS = [
     id: 'serve',
     cli: ['serve'],
     summary: '启动 Web 面板',
-    flags: { port: { type: 'number', default: DEFAULT_PORT }, 'no-open': { type: 'boolean' } },
+    flags: {
+      port: { type: 'number', default: DEFAULT_PORT },
+      'no-open': { type: 'boolean' },
+      'no-watch': { type: 'boolean' },
+    },
     run: (ctx) => cmdServe(ctx),
   },
   {
@@ -258,13 +262,41 @@ async function cmdServe(ctx) {
   console.log(APP_NAME + ' · ' + APP_TITLE + ' v' + VERSION);
   console.log(`面板:   ${addr}`);
   console.log(`存储:   ${storePathFromEnv()}`);
+
+  // 守护（进程内后台监听）。默认开：「改一篇笔记，检索立刻反映」是常态诉求，
+  // 每次开机还得先去面板点一下开关才是更差的开箱体验；--no-watch 可关掉。
+  // 没登记任何库时 startWatch 会报错——那是正常的空现场，报一句、继续起面板，
+  // 而不是让 `serve` 整个失败（用户可能就是来面板上添加第一个库的）。
+  let watchMod = null;
+  if (ctx['no-watch']) {
+    console.log('守护:   已关闭（--no-watch）');
+  } else {
+    try {
+      watchMod = await import('../modules/kb/watch.js');
+      const st = await watchMod.startWatch({
+        source: 'serve',
+        onEvent: (ev) => console.log('  ' + watchMod.formatEvent(ev)),
+      });
+      console.log(`守护:   已启动（${st.vaults.length} 个库 · 面板可开关）`);
+    } catch (err) {
+      console.log(`守护:   未启动（${(err && err.message) || err}）`);
+    }
+  }
+
   console.log('CLI:    ' + APP_NAME + ' help（每个按钮都有对应命令，agent 可加 --json）');
   console.log('按 Ctrl+C 停止');
 
   if (!ctx['no-open']) openBrowser(addr);
 
-  const shutdown = () => {
+  const shutdown = async () => {
     console.log('\n正在停止...');
+    // 无论是启动时起的、还是后来从面板开关打开的，这里都收尾（stopWatch 幂等）
+    try {
+      const w = watchMod || (await import('../modules/kb/watch.js'));
+      w.stopWatch();
+    } catch {
+      /* 从没起过守护 */
+    }
     server.close(() => process.exit(0));
   };
   process.on('SIGINT', shutdown);
