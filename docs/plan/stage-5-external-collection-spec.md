@@ -18,7 +18,7 @@
 | 仓库**没有任何爬虫代码** | 全仓搜 `crawl｜spider｜cheerio｜puppeteer｜playwright｜jsdom` **零命中** |
 | 运行依赖只有 `react` / `react-dom` | `package.json`（仅面板需要） |
 | nx-kn 是**纯检索**、不联网 | zg 只读本地 vault / 已加目录里的 `.md` |
-| 已发布到 npm | `nx-kn@0.1.0`（`dist-tags.latest = 0.1.0`） |
+| 已发布到 npm | 写本 spec 时是 `nx-kn@0.1.0`；**本阶段的实现已随 `nx-kn@0.2.0` 发布**（包内确认含 `src/modules/crawl/*` 与 `src/core/web.js`，`total files 82` / `199.5 kB`，provenance 已签名） |
 | 外部进程已有纪律可复用 | `src/core/zg.js`：spawn 引号规则、拒绝 `"`/`%`、**永不抛异常**只回 `{ok,code,stdout,stderr}`、解析函数一等公民且有单测 |
 
 **一句话定位**：本阶段把**vault 之外的资料源**清洗成 markdown 入知识库，再走同一套 zg 索引。
