@@ -9,4 +9,5 @@ export const VIEWS = [
   { id: 'home', title: '首页', component: lazy(() => import('../../modules/home/view.jsx')) },
   { id: 'settings', title: '设置', component: lazy(() => import('../../modules/settings/view.jsx')) },
   { id: 'kb', title: '知识库', component: lazy(() => import('../../modules/kb/view.jsx')) },
+  { id: 'crawl', title: '资料采集', component: lazy(() => import('../../modules/crawl/view.jsx')) },
 ];

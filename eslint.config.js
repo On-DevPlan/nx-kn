@@ -71,6 +71,7 @@ export default defineConfig([
       'src/modules/home/**/*.{js,jsx}',
       'src/modules/settings/**/*.{js,jsx}',
       'src/modules/kb/**/*.{js,jsx}',
+      'src/modules/crawl/**/*.{js,jsx}',
     ],
     rules: {
       'no-restricted-imports': [
@@ -85,6 +86,8 @@ export default defineConfig([
                 '../settings/**',
                 '../kb/*',
                 '../kb/**',
+                '../crawl/*',
+                '../crawl/**',
               ],
               message: '模块之间不得互相依赖；共享逻辑请下沉到 core/。',
             },

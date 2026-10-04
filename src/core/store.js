@@ -24,6 +24,12 @@ export function initialState() {
     // （`<root>/.zvec-grep/`），两个 vault 天然是两个索引；要「一起搜」就得
     // 记住多个根，检索时逐库召回再合并。单值字段表达不了这件事。
     kb: { vaults: [] },
+    // 资料采集域（modules/crawl）：外部文档站的抓取源。
+    // 与 kb.vaults **分列**：一个是「本地已有目录」，一个是「要去抓的站点」，
+    // 语义不同、生命周期也不同（源可增删，抓下来的目录会顺带登记成 vault）。
+    // 每页的 url→{file,hash} 映射写在源目录内的 .nx-kn-crawl.json，
+    // 不塞进 store（几百页的映射会让这个文件变得又大又吵）。
+    crawl: { sources: [] },
   };
 }
 
@@ -90,7 +96,7 @@ export function normalize(data) {
 
   // 其余顶层键：base 里声明过的按 base 的形状兜底，没声明过的原样带过来
   for (const [k, v] of Object.entries(data)) {
-    if (k === 'version' || k === 'settings' || k === 'kb') continue;
+    if (k === 'version' || k === 'settings' || k === 'kb' || k === 'crawl') continue;
     if (Array.isArray(v)) {
       base[k] = v;
     } else if (v && typeof v === 'object') {
@@ -104,6 +110,7 @@ export function normalize(data) {
   // 而上面那个通用分支对对象只做浅合并——旧数据的 `vault` / `model` 会被原样带过来，
   // `vaults` 则永远拿不到值。所以迁移必须在这里做完。
   base.kb = normalizeKb(data.kb);
+  base.crawl = normalizeCrawl(data.crawl);
   return base;
 }
 
@@ -166,6 +173,45 @@ function normalizeVault(v) {
 function displayNameOf(p) {
   const parts = String(p).split(/[\\/]+/).filter(Boolean);
   return parts.length ? parts[parts.length - 1] : String(p);
+}
+
+// ---- 采集域（crawl）的结构化归一化 ----
+
+// 一条采集源记录。name 是目录名（必填，决定抓取产物落哪），url 是起点。
+// include / max 是「抓哪些、抓多少」的边界，缺省给安全值（全收 / 上限 200）。
+function normalizeSource(s) {
+  if (!s || typeof s !== 'object') return null;
+  const name = s.name ? String(s.name) : null;
+  const url = s.url ? String(s.url) : null;
+  if (!name || !url) return null; // 缺 name 或 url 的记录无法工作，直接丢弃
+  const max = Number(s.max);
+  return {
+    name,
+    url,
+    include: s.include ? String(s.include) : '**',
+    max: Number.isFinite(max) && max > 0 ? Math.floor(max) : 200,
+    addedAt: s.addedAt ? String(s.addedAt) : null,
+    lastRunAt: s.lastRunAt ? String(s.lastRunAt) : null,
+    // 上一次抓取的统计（面板/列表展示用；权威数据在源目录的 manifest 里）
+    pages: Number.isFinite(Number(s.pages)) ? Number(s.pages) : null,
+    failed: Number.isFinite(Number(s.failed)) ? Number(s.failed) : null,
+    via: s.via ? String(s.via) : null,
+  };
+}
+
+export function normalizeCrawl(raw) {
+  const src = raw && typeof raw === 'object' ? raw : {};
+  const out = { sources: [] };
+  const seen = new Set();
+  if (Array.isArray(src.sources)) {
+    for (const s of src.sources) {
+      const rec = normalizeSource(s);
+      if (!rec || seen.has(rec.name)) continue; // 按 name 去重（name 就是目录名）
+      seen.add(rec.name);
+      out.sources.push(rec);
+    }
+  }
+  return out;
 }
 
 // 测试与调试用：清掉进程内缓存，强制下次重读

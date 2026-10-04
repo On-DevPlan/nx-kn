@@ -235,27 +235,48 @@ Claude Code 侧 agent 能自助完成「建索引 / 提问」闭环。
 
 ---
 
-### 阶段 5 — 外部资料采集（v0.2 预留，不阻塞 v0.1）
+### 阶段 5 — 外部资料采集（**已实现**，2026-10-04）
+
+> **实现记录**：本阶段已落地，代码在 `src/modules/crawl/` + `src/core/web.js`；
+> 展开的独立 spec 见 [`stage-5-external-collection-spec.md`](./stage-5-external-collection-spec.md)，
+> 面向使用者的手册见随包 `assets/nx-kn/references/20-external-collection.md`。
 
 **目标**（架构图第 5 条）：把 vault 之外的资料源清洗成 markdown 入知识库，
 再走同一套 zg 索引。
 
-**参考实现（只借思路，不引入为依赖）**
-[Skill Seekers](https://github.com/yusufkaraaslan/Skill_Seekers)（MIT，Python 3.10+）：
-文档站 / GitHub 仓库 / PDF 等 **18 种数据源** → 抓取 → 分类 → AI 增强 → 打包，
-自带 **stdio 模式 MCP 服务器**（`python -m skill_seekers.mcp.server_fastmcp`）。
-「一丢丢爬虫参考」指借它的抓取与清洗思路。
+#### 决策修正：进程形态由「Node → Python 子进程」改判为**纯 Node**
 
-**实现口径**
+原计划的「进程形态 = Node 主进程 → Python 子进程，stdio 通信」经逐条复核后**推翻**，
+理由记在这里以免日后反复（完整论证见 spec §1）：
+
+| 原计划的理由 | 复核结果 |
+| --- | --- |
+| 「借 [Skill Seekers](https://github.com/yusufkaraaslan/Skill_Seekers) 思路」 | Skill Seekers 确实是 Python，但本节已明确**不引入为依赖**。要借的是「抓取与清洗**思路**」，与实现语言无关 |
+| 「Python 侧实践参考 rt：scraper / playwright / OCR」 | **实测 rt 的抓取栈**：简单站点用 `httpx + bs4`，`playwright` 只出现在**登录 + 验证码**场景。公开文档站两者都不需要 |
+| （隐含）「抓取需要浏览器渲染」 | `playwright` 有**一等公民的 Node 包**，渲染不构成 Python 的必要条件 |
+| — | 而 nx-kn 是**发布到 npm 的包**：要求用户额外装 Python 3.10+ / venv / pip 依赖，直接违背「装上即可用、不需要用户额外手动操作」 |
+
+若将来确实需要 Python（如 PDF / OCR），再按 `B05-multi-line-cli-input` 以**可选旁路**加入，
+而不是把 Python 设为主干前提。
+
+#### 实现口径（实际落地）
 
 | 维度 | 决定 |
 | --- | --- |
-| 进程形态 | Node 主进程 → **Python 子进程**，stdio 通信 |
-| 调用规范 | 按 `sl/skills/server-cli-web-scaffold/references/B05-multi-line-cli-input.md`（多行参数走 stdin `-` 占位、heredoc 四类实测错误、spawnSync 隔离测试） |
-| Python 侧实践参考 | rt 项目 `backend/src/rt_backend/`（scraper / playwright / OCR 的既有写法） |
-| 触发 | 架构图明确「一丢丢」——**最小实现**，先只做 1~2 种数据源（如单个文档站），不追 18 种 |
+| 进程形态 | **纯 Node**（无子进程）。抓取用内置 `fetch`，HTML 解析用 `cheerio` + `turndown`(+`turndown-plugin-gfm`) |
+| 数据流 | 抓取产物落成**普通 `.md` 目录** `~/.nx-kn/sources/<名>/`，再**当作一个知识库登记** → 索引/检索/增量/多库合并全部复用 kb 域 |
+| 发现 | sitemap 优先（`sitemapindex` 递归），回退同域 BFS；只抓同源、串行、300ms 间隔 |
+| 增量 | 按**清洗后正文的内容哈希**判定；未变不写盘（保留 mtime）→ 后续 `zg index` 如实报 `unchanged` |
+| 触发 | 架构图明确「一丢丢」——**最小实现**，只做**静态 HTML 文档站**一种数据源 |
+| 命令面 | `crawl add / run / list / remove`（与 kb 域动词对齐，`run` 对应 kb 的 `index`） |
+| JS 渲染 | MVP **不做**（需要时再评估 Node 版 `playwright`） |
 
-**前置**：阶段 2 稳定后再启动；启动前把本节展开为独立的 spec。
+#### 参考实现（只借思路，不引入为依赖）
+
+[Skill Seekers](https://github.com/yusufkaraaslan/Skill_Seekers)（MIT，Python 3.10+）：
+文档站 / GitHub 仓库 / PDF 等 18 种数据源 → 抓取 → 分类 → AI 增强 → 打包，
+自带 stdio 模式 MCP 服务器。「一丢丢爬虫参考」指借它的抓取与清洗思路 —— 仅**阅读参考**，
+不是被调用的组件。
 
 ---
 
@@ -293,7 +314,8 @@ Claude Code 侧 agent 能自助完成「建索引 / 提问」闭环。
 - 不做 LLM 问答（RAG）
 - 不做 wikilink / backlink 关系图谱
 - 不做图片 / PDF 多模态索引
-- **v0.1 不做外部资料采集**（爬虫入库存检索）——列为阶段 5，v0.2 预留
+- ~~v0.1 不做外部资料采集~~ → **已在阶段 5 实现**（2026-10-04）：只做**静态 HTML 文档站**一种源
+- 采集中**不做**：需要登录 / 验证码的站点、需要 JS 渲染的站点、全站镜像、定时守护（watch 留后续）
 - 不把 Skill Seekers 引入为依赖（只作参考实现阅读）
 - 不装 zg 的 MCP（沿用 nx-rp 的纪律：zg 只当召回引擎）
 - 不迁移 nx-rp 存量知识库

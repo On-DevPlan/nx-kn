@@ -4,7 +4,7 @@
 // nx-kn / nx-kn / Obsidian 知识库检索（zg 引擎） / 7881 被替换，其余文件一律引用这些常量。
 // 要加新常量请加在这里，不要在别处写字符串字面量。
 import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { badInput } from './errors/index.js';
 
 // ---- 项目标识 ----
@@ -15,6 +15,49 @@ export const APP_DESC = 'Obsidian 知识库检索（zg 引擎）';
 // ---- 数据目录（用户主目录下，可用环境变量覆盖）----
 export const APP_DIR = join(homedir(), '.nx-kn');
 export const STORE_PATH = join(APP_DIR, 'store.json');
+
+// ---- 资料采集（外部源）----
+//
+// 抓取产物落成普通 markdown 目录，再当作一个知识库登记 —— 于是索引、检索、
+// 增量、多库合并全部复用 kb 域，采集域只负责「URL → 干净 markdown」。
+//
+// 放在「数据目录」下而不是用户随便挑的目录：采集产物是 nx-kn 的中间产物
+// （可随时重抓重建），集中在一处便于「谁能删、删了会怎样」说得清。
+//
+// 关键：sources 目录**跟着 store.json 走**（同一个数据目录），而不是钉死在
+// ~/.nx-kn/。这样 NX_KN_STORE / --store 这一个既有开关就能同时搬动
+// 「库列表 + 采集产物」——测试指向临时目录即天然隔离，用户也能整体挪窝。
+export const CRAWL_MANIFEST = '.nx-kn-crawl.json';
+
+export function dataDirFromEnv() {
+  return dirname(storePathFromEnv());
+}
+
+export function sourcesDir() {
+  return join(dataDirFromEnv(), 'sources');
+}
+
+export function sourceDirOf(name) {
+  return join(sourcesDir(), String(name));
+}
+
+// 抓取时的 User-Agent：表明身份，站点管理员若反感可据此封禁（比伪装成浏览器体面）。
+// 刻意不带版本号：写死版本会随发版漂移，而无版本的 UA 已经足够表明身份。
+export const CRAWL_UA = 'nx-kn (+https://github.com/On-DevPlan/nx-kn)';
+
+// 相邻两次抓取的间隔（毫秒）。默认 300ms：串行 + 节流，不去打爆别人的站点。
+// 测试要快，用环境变量压到 0——这条逃生舱和 NX_KN_EMBEDDING 是同一个思路。
+export const CRAWL_DELAY_ENV = 'NX_KN_CRAWL_DELAY_MS';
+
+export function crawlDelayMs() {
+  const v = process.env[CRAWL_DELAY_ENV];
+  if (v !== undefined && String(v).trim() !== '') {
+    const n = Number(v);
+    if (Number.isFinite(n) && n >= 0) return n;
+  }
+  return 300;
+}
+
 
 // ---- 端口 ----
 // serve 的 HTTP 端口。vite dev server 的端口在 vite.config.js 里单独配。

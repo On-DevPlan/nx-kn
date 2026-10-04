@@ -18,15 +18,21 @@
 //   P7  新笔记可召回     nx-kn query
 //   P8  多库合并         kb add + index + query → 命中带来源库
 //   P9  移除             kb remove            → 只解登记、不删索引
+//   P10 采集（爬虫）     crawl add + run      → 本地「文档站」抓成 markdown（不联网）
+//   P11 采集增量         crawl run            → 内容未变 0 重写；改一页只重写该页
+//   P12 采集内容可检索   index + query        → 抓下来的词能命中、能读到原文
+//   P13 采集移除         crawl remove         → 默认保留文件与知识库登记；--purge 连目录删
 //
 // 隔离：临时 store + 临时 skills 目录 + 临时 vault，绝不碰用户的真实数据。
+// （采集产物目录跟着 store 走，见 core/paths.js 的 sourcesDir()——所以隔离是全覆盖的。）
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import http from 'node:http';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join, dirname, basename } from 'node:path';
+import { join, dirname, basename, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { DEFAULT_EMBEDDING } from '../src/core/paths.js';
 import { INDEX_DIR, probe } from '../src/core/zg.js';
@@ -81,6 +87,64 @@ const NOTE_D = `# 打包发布流程
 先用 pnpm build，再跑 npm publish。打 tag 之前先确认版本号。
 `;
 
+// ---- 本地「文档站」：采集链路测试用它代替真实站点 ----
+//
+// 为什么不用真站点：流水线的目标是「CI 可复现全链路」。依赖别人的站点，
+// CI 会因为对方波动/改版而红——那是把不确定性引进门。这里用 node:http 起一个
+// 静态站，带 sitemap、导航/页脚噪声、以及每页独有的关键词，足以覆盖
+// 「发现 → 抓取 → 清洗 → 落盘 → 增量」的每一步。
+function docPage(title, keyword, links = []) {
+  return `<!doctype html><html><head><title>${title}</title></head><body>
+  <nav>SITE-NAV</nav>
+  <main>
+    <h1>${title}</h1>
+    <p>${keyword} 是这一页独有的关键词。</p>
+    ${links.map(([href, text]) => `<a href="${href}">${text}</a>`).join('\n')}
+  </main>
+  <footer>SITE-FOOTER</footer>
+</body></html>`;
+}
+
+function startDocSite() {
+  const pages = new Map([
+    ['/', docPage('首页', 'homeword-unique', [['/guide/getting-started', 'Getting started'], ['/api/reference', 'API reference']])],
+    ['/guide/getting-started', docPage('Getting Started', 'guideword-unique', [['/api/reference', 'API reference']])],
+    ['/api/reference', docPage('API Reference', 'apiword-unique', [])],
+  ]);
+
+  const server = http.createServer((req, res) => {
+    const host = req.headers.host;
+    const u = new URL(req.url, `http://${host}`);
+    if (u.pathname === '/sitemap.xml') {
+      const body =
+        '<?xml version="1.0" encoding="UTF-8"?>\n<urlset>\n' +
+        [...pages.keys()].map((p) => `  <url><loc>http://${host}${p}</loc></url>`).join('\n') +
+        '\n</urlset>\n';
+      res.writeHead(200, { 'content-type': 'application/xml; charset=utf-8' });
+      res.end(body);
+      return;
+    }
+    if (pages.has(u.pathname)) {
+      res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+      res.end(pages.get(u.pathname));
+      return;
+    }
+    res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' });
+    res.end('not found');
+  });
+
+  return new Promise((ready) => {
+    server.listen(0, '127.0.0.1', () => {
+      const port = server.address().port;
+      ready({
+        base: `http://127.0.0.1:${port}/`,
+        set: (p, html) => pages.set(p, html),
+        close: () => new Promise((r) => server.close(r)),
+      });
+    });
+  });
+}
+
 test('流水线：skill 安装 → 建库 → 建索引 → 检索 → 增量 → 多库 → 移除', async (t) => {
   const zg = await probe();
   if (!zg.installed) {
@@ -102,10 +166,12 @@ test('流水线：skill 安装 → 建库 → 建索引 → 检索 → 增量 �
 
   // NX_KN_VAULT 必须清空：一旦在场，它会压过 store 列表，多库这条路就走不到了。
   // NX_KN_EMBEDDING 显式给出（或显式清空），免得开发机 shell 里的残留影响判定。
+  // NX_KN_CRAWL_DELAY_MS=0：抓取的礼貌间隔在测试里要关掉，否则几十页会白等。
   const env = {
     NX_KN_STORE: join(base, 'store.json'),
     NX_KN_VAULT: '',
     NX_KN_EMBEDDING: PIPELINE_MODEL,
+    NX_KN_CRAWL_DELAY_MS: '0',
   };
 
   t.after(() => {
@@ -267,5 +333,121 @@ test('流水线：skill 安装 → 建库 → 建索引 → 检索 → 增量 �
     assert.equal(r2.count, 0);
     const list = await runJson(['kb', 'list', '--json'], env);
     assert.equal(list.count, 0);
+  });
+
+  // ---- 阶段 5：外部资料采集（爬虫）。全程打本地静态站，CI 不联网。 ----
+
+  await t.test('P10 采集：crawl add + run 把「文档站」抓成 markdown 并自动登记为知识库', async (t2) => {
+    const site = await startDocSite();
+    t2.after(() => site.close());
+
+    const add = await runJson(['crawl', 'add', site.base, '--name', 'localdocs', '--json'], env);
+    assert.equal(add.name, 'localdocs');
+    assert.equal(add.max, 200, '默认上限 200 页');
+
+    // 登记后还没抓 → 0 页
+    const before = await runJson(['crawl', 'list', '--json'], env);
+    assert.equal(before.count, 1);
+    assert.equal(before.sources[0].pages, 0);
+    assert.equal(before.sources[0].registered, false);
+
+    const r = await runJson(['crawl', 'run', '--name', 'localdocs', '--json'], env, { timeoutMs: 120_000 });
+    const res = r.results[0];
+    assert.equal(res.via, 'sitemap', '本地站带 sitemap.xml，应走 sitemap 发现');
+    assert.equal(res.pages, 3);
+    assert.equal(res.changes.added, 3, '三页都应是新增');
+    assert.equal(res.failed, 0);
+
+    // 落盘：每个 URL 一个 .md，带 frontmatter
+    const dir = res.dir;
+    for (const f of ['index.md', join('guide', 'getting-started.md'), join('api', 'reference.md')]) {
+      assert.ok(existsSync(join(dir, f)), `应落盘: ${join(dir, f)}`);
+    }
+    const body = readFileSync(join(dir, 'guide', 'getting-started.md'), 'utf8');
+    assert.match(body, /^---\nsource: /, '应有 frontmatter');
+    assert.match(body, /# Getting Started/);
+    assert.match(body, /guideword-unique/);
+    assert.ok(!body.includes('SITE-NAV'), '页面导航不应进 markdown');
+    assert.ok(!body.includes('SITE-FOOTER'), '页脚不应进 markdown');
+
+    // 抓完自动登记为知识库（与手动 kb add 完全同构）
+    const kb = await runJson(['kb', 'list', '--json'], env);
+    assert.equal(kb.count, 1, '抓完应自动登记为 1 个知识库');
+    assert.equal(resolve(kb.vaults[0].path), resolve(dir));
+
+    const after = await runJson(['crawl', 'list', '--json'], env);
+    assert.equal(after.sources[0].pages, 3);
+    assert.equal(after.sources[0].registered, true);
+    assert.ok(after.sources[0].lastRunAt, '应记录上次抓取时间');
+  });
+
+  await t.test('P11 采集增量：内容未变 → 0 重写；改一页 → 只重写那一页', async (t2) => {
+    const site = await startDocSite();
+    t2.after(() => site.close());
+
+    await runJson(['crawl', 'add', site.base, '--name', 'inc', '--json'], env);
+    const first = await runJson(['crawl', 'run', '--name', 'inc', '--json'], env, { timeoutMs: 120_000 });
+    assert.equal(first.results[0].changes.added, 3);
+
+    // 第二次：站点没变。哈希只算正文（frontmatter 里的 fetchedAt 每次都变），
+    // 所以这里必须报 3 未变、0 新增 0 更新——否则增量就失效了。
+    const again = await runJson(['crawl', 'run', '--name', 'inc', '--json'], env, { timeoutMs: 120_000 });
+    const c2 = again.results[0].changes;
+    assert.equal(c2.added, 0, '没改动不该新增');
+    assert.equal(c2.updated, 0, '没改动不该重写（内容哈希一致）');
+    assert.equal(c2.unchanged, 3);
+
+    // 改一页内容后重抓：只有那一页被重写
+    site.set('/api/reference', docPage('API Reference', 'apiword-changed', []));
+    const third = await runJson(['crawl', 'run', '--name', 'inc', '--json'], env, { timeoutMs: 120_000 });
+    const c3 = third.results[0].changes;
+    assert.equal(c3.updated, 1, '只有改动过的那一页该被重写');
+    assert.equal(c3.unchanged, 2);
+    assert.match(readFileSync(join(third.results[0].dir, 'api', 'reference.md'), 'utf8'), /apiword-changed/);
+  });
+
+  await t.test('P12 采集内容可检索：index + query 命中抓下来的页面并读到原文', async () => {
+    // P10/P11 抓下来的两个目录都已自动登记为知识库
+    const kbBefore = await runJson(['kb', 'list', '--json'], env);
+    assert.equal(kbBefore.count, 2, 'P10 与 P11 各登记了一个知识库');
+
+    const idx = await runJson(['index', '--json'], env, { timeoutMs: 900_000 });
+    assert.equal(idx.status, 'ok');
+    assert.equal(idx.count, 2);
+
+    const r = await runJson(['query', 'guideword-unique', '--json'], env);
+    assert.ok(r.hits.length > 0, '抓下来的页面内容应能被检索到');
+    const h = r.hits[0];
+    const abs = join(h.vault, h.path);
+    assert.ok(existsSync(abs), `按提示拼出的路径不存在: ${abs}`);
+    assert.match(readFileSync(abs, 'utf8'), /guideword-unique/);
+  });
+
+  await t.test('P13 采集移除：默认保留文件与知识库登记；--purge 连目录一起删', async () => {
+    const l = await runJson(['crawl', 'list', '--json'], env);
+    const localdocs = l.sources.find((s) => s.name === 'localdocs');
+    assert.ok(localdocs, 'localdocs 应在列表里');
+
+    const r1 = await runJson(['crawl', 'remove', 'localdocs', '--json'], env);
+    assert.equal(r1.removed, 'localdocs');
+    assert.equal(r1.purged, null, '默认不该删目录');
+    assert.ok(existsSync(join(localdocs.dir, 'index.md')), '默认应保留抓下来的文件');
+    const kb1 = await runJson(['kb', 'list', '--json'], env);
+    assert.ok(
+      kb1.vaults.some((v) => resolve(v.path) === resolve(localdocs.dir)),
+      '默认应保留知识库登记（抓下来的目录仍是有用的知识库）'
+    );
+
+    const r2 = await runJson(['crawl', 'remove', 'inc', '--purge', '--json'], env);
+    assert.ok(r2.purged, '--purge 应返回被删目录');
+    assert.ok(!existsSync(r2.purged), '--purge 应真的把目录删掉');
+    const kb2 = await runJson(['kb', 'list', '--json'], env);
+    assert.ok(
+      !kb2.vaults.some((v) => resolve(v.path) === resolve(r2.purged)),
+      '--purge 应连带撤掉知识库登记'
+    );
+
+    const r3 = await runJson(['crawl', 'list', '--json'], env);
+    assert.equal(r3.count, 0);
   });
 });

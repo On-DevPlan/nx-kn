@@ -11,8 +11,9 @@ import { cliPathsOf } from './spec.js';
 import home from '../modules/home/index.js';
 import settings from '../modules/settings/index.js';
 import kb from '../modules/kb/index.js';
+import crawl from '../modules/crawl/index.js';
 
-export const MODULES = [home, settings, kb].sort((a, b) => (a.order ?? 100) - (b.order ?? 100));
+export const MODULES = [home, settings, kb, crawl].sort((a, b) => (a.order ?? 100) - (b.order ?? 100));
 
 export const ACTIONS = MODULES.flatMap((m) =>
   (m.actions || []).map((a) => ({ ...a, module: m.id }))

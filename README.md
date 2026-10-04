@@ -14,11 +14,14 @@ pnpm start    # 构建并启动面板
 按融合分（RRF）合并成一张列表，每条标出所属库。本机工具：CLI 与 Web 面板共享同一份
 action 声明（`src/modules/*/index.js`），一条命令三端同源——CLI、HTTP API、面板按钮不会分叉。
 
+需要时还能把 **vault 之外的文档站抓下来**：`crawl run` 把静态 HTML 清洗成 markdown、
+落成普通目录并**自动登记为知识库**，于是索引 / 检索 / 增量 / 多库合并全部复用 kb 域。
+
 | | |
 | --- | --- |
 | CLI 命令表 | `nx-kn help`（或 `routes` 看命令 ↔ 路由对照） |
 | Web 面板 | `pnpm start` 后打开 `http://127.0.0.1:7881` |
-| 数据 | `~/.nx-kn/store.json`（原子写；环境变量 `NX_KN_STORE` 覆盖） |
+| 数据 | `~/.nx-kn/store.json` + `~/.nx-kn/sources/`（原子写；环境变量 `NX_KN_STORE` 覆盖，sources 跟着走） |
 | 索引 | 每个库各自的 `<vault>/.zvec-grep/`（由 zg 拥有） |
 | 自检 | `nx-kn health` |
 
@@ -33,6 +36,16 @@ nx-kn query "登录页为什么提示超时"      # 跨全部库检索
 nx-kn status                          # 各库的索引状态 / 生效模型 / 覆盖度
 ```
 
+抓一个文档站（静态 HTML）：
+
+```bash
+nx-kn crawl add https://vitepress.dev/guide/ --name vitepress   # 登记采集源（不联网）
+nx-kn crawl run --name vitepress                                # 抓取 + 清洗成 markdown（默认增量）
+nx-kn index                                                     # 抓下来的目录已自动登记，直接建索引
+nx-kn query "怎么配置主题"                                       # 与本地 vault 一起被检索
+nx-kn crawl remove vitepress --purge                            # 不要了：连文件一起删
+```
+
 `query` 的输出带一段归属头（每个库的根 + 库名）；多库时命中带 `[库名]` 前缀，
 agent 拿到后可以拼出绝对路径去读全文。`--json` 给结构化 `hits[]`
 （`path / start / end / heading / snippet / matchedBy / score / vault / vaultName`）。
@@ -44,11 +57,12 @@ agent 拿到后可以拼出绝对路径去读全文。`--json` 给结构化 `hit
 
 ```
 src/
-├─ core/      基础设施：paths（参数化中心）/ errors / store（JSON 持久化）/ zg（召回引擎驱动）/ open
+├─ core/      基础设施：paths（参数化中心）/ errors / store（JSON 持久化）/ zg（召回引擎驱动）/ web（HTML→markdown 等纯函数）/ open
 ├─ modules/   功能域，各含 index.js（action 声明）+ service.js（业务）+ view.jsx（面板）
 │   ├─ home/       示例域（读路径）
 │   ├─ settings/   示例域（写路径：面板表单 → POST → mutateStore → CLI 同源可读）
-│   └─ kb/         知识库域：kb add / kb remove / kb list + index / query / status
+│   ├─ kb/         知识库域：kb add / kb remove / kb list + index / query / status
+│   └─ crawl/      资料采集域：crawl add / run / list / remove（抓文档站 → markdown → 当知识库）
 ├─ runtime/   装配：registry（action 汇合）/ cli / api / server / spec
 └─ web/       React 面板壳（vite 构建，产物被零依赖 node:http 服务）
 docs/
@@ -90,8 +104,19 @@ pnpm logo           # 手动重出 logo（svg + png + ico 全套）
 空现场把用户引到 `kb add`、加库、**不给 `--model` 也能建索引**（默认兜底）、
 检索命中后按提示拼出的绝对路径真能读到原文、增量只嵌新文件（旧向量保留）、
 多库合并命中带来源库名、`kb remove` 只解登记不删索引。
+
+采集链路也在里面：起一个 `node:http` **本地静态「文档站」**（带 sitemap、导航/页脚噪声、
+每页独有词），跑 `crawl add` → `crawl run` → 断言 sitemap 发现、三页落盘带 frontmatter、
+导航页脚被剔除、**抓完自动登记为知识库** → 再跑一次断言「内容未变 0 重写」、
+改一页后断言「只重写那一页」→ `index` + `query` 命中抓下来的词并能读到原文 →
+`crawl remove` 默认保留文件与知识库登记、`--purge` 连目录删。**全程不联网**，
+CI 不会因为别人的站点波动而红。
+
 每一步是一个独立子测试，失败能直接看出卡在哪一环。CI 与发版流水线都会跑它，
 用 `NX_KN_PIPELINE_MODEL=local/potion-code-16m-v2` 指一个小模型省下载。
+
+运行时依赖只有 `react` / `react-dom`（面板）与 `cheerio` / `turndown`（+`turndown-plugin-gfm`，采集侧 HTML→markdown）；
+zg 是外部引擎，通过 npm 全局安装，不在本包依赖里。
 
 ## 发版
 

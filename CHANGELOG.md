@@ -4,6 +4,44 @@
 
 ## [Unreleased]
 
+### Added — 外部资料采集（把文档站抓成知识库）
+
+- **`modules/crawl/`（阶段 5）**：把 vault 之外的**静态 HTML 文档站**抓下来、清洗成
+  markdown 入知识库。核心设计是「抓取产物落成**普通 .md 目录**，再当作一个知识库登记」——
+  于是索引 / 检索 / 增量 / 多库合并 / 面板全部复用 kb 域，采集只负责「URL → 干净 markdown」
+- 四条 action（CLI + HTTP 同源）：`crawl add <url> [--name N] [--match glob] [--max N]`、
+  `crawl run [--name N] [--rebuild]`、`crawl list`、`crawl remove <name> [--purge]`
+- **发现**：优先 `<站点根>/sitemap.xml`（`sitemapindex` 递归，限深 3 层），回退**同域 BFS**；
+  只抓同源、串行、间隔 300ms（`NX_KN_CRAWL_DELAY_MS` 可改）、单请求超时 20s、自定义 UA
+- **清洗**（`core/web.js`，纯函数 + 单测）：正文容器优先 `main`/`article`/`[role=main]`/
+  `.theme-default-content`/`.vp-doc`/`.markdown-body` 等；剔除 nav/footer/aside/侧栏/目录树/
+  面包屑/编辑链接与图片；相对链接转绝对；**表格转 GFM**；每页一个 `.md`（带
+  `source`/`title`/`fetchedAt` frontmatter）
+- **增量按内容哈希**（不是时间戳）：哈希只算**正文**（`fetchedAt` 每次都变，算进去会让
+  增量永远失效），未变的页面**不写盘** → 后续 `zg index` 如实报 `unchanged`，不重复嵌入
+- **落盘**：`<数据目录>/sources/<源名>/`，增量清单 `.nx-kn-crawl.json`（`url → { file, hash }`，
+  以 `.` 开头 → zg 默认不扫）。**sources 跟着 store 走**（同一个数据目录），所以
+  `NX_KN_STORE` / `--store` 一次搬动全部数据 —— 测试隔离也因此是全覆盖的
+- **`crawl remove` 默认只解登记**：抓下来的文件与 zg 索引留着（它同时还是一个知识库）；
+  `--purge` 才连目录带知识库登记一起删。与 `kb remove` 的语义对齐
+- **面板新增「资料采集」tab**：源列表（页数 / 失败数 / 上次抓取 / 是否已入知识库）+
+  添加源 / 抓取更新（增量、主按钮）/ 重新抓取（全量）/ 移除，附 CLI 等价提示
+- 随包手册新增 `references/20-external-collection.md`；`SKILL.md` 补采集触发词、
+  第 5 条核心不变量与「资料采集」典型会话（抓取 → 清洗 → 建索引 → 检索）
+
+### Added — 全链路流水线测试的采集段
+
+- `tests/pipeline.mjs` 新增 P10–P13：起 `node:http` **本地静态「文档站」**（sitemap +
+  导航/页脚噪声 + 每页独有词），断言 sitemap 发现、三页落盘带 frontmatter、版式噪声被剔除、
+  **抓完自动登记为知识库**；再抓一次断言「内容未变 → 0 重写」，改一页断言「只重写那一页」；
+  `index`+`query` 命中抓下来的词并按提示拼路径读到原文；`crawl remove` 默认保留文件与
+  知识库登记、`--purge` 连目录删。**全程不联网** —— 流水线的目标是「CI 可复现」，
+  依赖外部站点会把不确定性引进门
+- 新增单测 `tests/unit/web.test.mjs`（URL 归一、同源判定、sitemap 解析、glob、
+  路径映射与目录穿越、HTML→markdown 噪声剔除与表格转换、空白收敛）与
+  `tests/unit/crawl-store.test.mjs`（`crawl.sources[]` 归一化：缺键补默认、按名去重、
+  老 store 自动补齐）
+
 ### Added — 多知识库（多个 vault 一起检索）
 
 - **`kb.vault`（单值）→ `kb.vaults[]`（列表）**：可以添加多个目录，检索时逐库召回再合并。

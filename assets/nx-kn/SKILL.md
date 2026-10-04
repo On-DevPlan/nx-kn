@@ -1,13 +1,14 @@
 ---
 name: nx-kn
-description: 当需要检索本机 Obsidian 知识库（笔记全文 / 语义搜索）、建立或更新索引、增减知识库目录、查看索引状态时使用。触发词：知识库、笔记、检索、搜索、召回、Obsidian、vault、索引、query、index、多个库、添加目录。不适用：需要 LLM 问答或摘要（本工具只召回、不生成）；需要爬取 vault 之外的网页文档（未实现）。
+description: 当需要检索本机 Obsidian 知识库（笔记全文 / 语义搜索）、建立或更新索引、增减知识库目录、查看索引状态，或把 vault 之外的**文档站**抓下来入知识库时使用。触发词：知识库、笔记、检索、搜索、召回、Obsidian、vault、索引、query、index、多个库、添加目录、抓取文档站、爬虫、资料采集、crawl、离线文档。不适用：需要 LLM 问答或摘要（本工具只召回、不生成）；需要登录/验证码或必须靠 JS 渲染的站点。
 ---
 
 # nx-kn
 
 一句话：把本机的**若干** Obsidian vault 当成知识库，用 zg（zvec-grep）做「精确 + 关键词 + 语义」
 三路混合检索，跨库结果按融合分合并成一张列表，带所属库名 + 库内相对路径 + 行号；
-CLI 与 Web 面板共享同一份 action 声明。
+CLI 与 Web 面板共享同一份 action 声明。需要时还能把**文档站抓下来**清洗成 markdown、
+当作一个知识库一起检索。
 
 ## 核心不变量（违反会怎样）
 
@@ -23,6 +24,10 @@ CLI 与 Web 面板共享同一份 action 声明。
    组织（`<root>/.zvec-grep/`），两个 vault 天然是两个索引、可以有两个不同模型。
    因此：查询是逐库召回后按 score 合并，命中**必须**带上所属库名（只给相对路径
    无法定位到磁盘文件），且某个库召回失败不能拖垮整次查询。
+5. **采集产物是普通 markdown 目录，不是特殊数据源**——`nx-kn crawl run` 把文档站
+   清洗成 `<数据目录>/sources/<名>/**/*.md`，然后**当作一个知识库登记**。
+   于是索引 / 检索 / 增量 / 多库合并全部复用 kb 域，采集只负责「URL → 干净 markdown」。
+   抓完还要跑一次 `nx-kn index` 才进索引。
 
 ## 命令速查
 
@@ -34,6 +39,10 @@ CLI 与 Web 面板共享同一份 action 声明。
 | `nx-kn index [--rebuild] [--model M] [--types md,txt] [--root 路径]` | 对**全部库**建 / 增索引（默认只收 md）；不带 `--rebuild` 即**增量**；**换模型必须叠加 `--rebuild`** |
 | `nx-kn query "<问句>" [--limit N] [--preview none\|short\|full] [--root 路径]` | 跨全部库混合检索，按融合分合并；输出 `[库名] 相对路径:行号` + 片段 |
 | `nx-kn status` | zg 可用性 / 各库笔记数 / 索引覆盖度 / 生效模型 |
+| `nx-kn crawl add <url> [--name N] [--match glob] [--max N]` | 登记一个**文档站**采集源（只登记不抓） |
+| `nx-kn crawl run [--name N] [--rebuild]` | 抓取并清洗成 markdown；默认增量（内容未变的页面不重写） |
+| `nx-kn crawl list` | 采集源列表 + 上次抓取时间 / 页数 / 失败数 |
+| `nx-kn crawl remove <name> [--purge]` | 解登记（默认保留抓下来的文件与知识库登记；`--purge` 连目录一起删） |
 | `nx-kn serve [--port N] [--no-open]` | 启动 Web 面板 |
 | `nx-kn routes` | CLI 命令 ↔ HTTP 路由对照表（agent 摸底从这里开始） |
 | `nx-kn help [topic]` | 帮助；`help --json` 输出可解析命令表 |
@@ -86,19 +95,45 @@ CLI 与 Web 面板共享同一份 action 声明。
 「没显式指定时用哪个模型」——CI、内网、或者只想快跑一遍时用得上。
 它压不过 `--model`，也压不过已建索引里锁定的模型（换模型是显式动作，不该被偷袭）。
 
+## 资料采集（把文档站变成知识库）
+
+需要「离线查某个文档站 / 网页资料」时，先抓再检索。**全程不需要用户手动操作**：
+
+1. `nx-kn crawl add <文档站地址> --name <名> --json` —— 登记采集源（只登记，不联网）
+   - 可选 `--match '/guide/**'` 只抓一段路径、`--max <n>` 改页数上限（默认 200）
+   - 省略 `--name` 时从地址推导（`vitepress.dev/guide` → `vitepress-dev-guide`）
+2. `nx-kn crawl run --name <名> --json` —— 抓取并清洗成 markdown。
+   取 `results[].via`（`sitemap` / `bfs`）、`changes`（added/updated/unchanged）、`failed`
+3. `nx-kn index --json` —— 抓下来的目录已**自动登记为知识库**，直接建索引即可
+   （也可 `--root <results[].dir>` 只给这一个建）
+4. `nx-kn query "问题" --json` —— 与本地 vault 一起被检索，命中带来源库名
+
+要点：
+
+- **静态 HTML 站才支持**：优先 sitemap，回退同域 BFS；只抓同源；串行 + 节流
+- **增量靠内容哈希**：`crawl run` 重跑时内容没变的页面不写盘，后续索引如实报 `unchanged`
+- 抓取范围（`--match` / `--max`）在 `crawl add` 时定；要改就 `crawl remove` 后重新 `crawl add`
+- 删数据用 `nx-kn crawl remove <名> --purge`（不带 `--purge` 只解登记，文件留着）
+
 ## 什么时候不用
 
 - 需要多用户 / 远程部署（这是本机单用户工具）
 - 需要 LLM 问答、摘要、改写（本工具只做召回）
 - 需要 wikilink / backlink 关系图谱（不在范围内）
 - 需要跨库**去重/合并同一篇笔记**：两个库若有目录嵌套，同一文件可能被两个索引各收一次
+- 需要抓**需要登录 / 验证码 / 靠 JS 渲染**的站点（采集只处理静态 HTML）
 
 ## 数据与存储
 
 - 状态存 `~/.nx-kn/store.json`，原子写；环境变量 `NX_KN_STORE` 可覆盖路径
 - 知识库列表在 `kb.vaults[]`，每项是 `{ path, name, model, addedAt }`——
   模型是**每库一个**（旧版的全局单值会在读取时自动迁移成列表）
+- 采集源在 `crawl.sources[]`（与 `kb.vaults` **分列**）；抓下来的 markdown 落在
+  `<数据目录>/sources/<源名>/**/*.md`，每页一个 `.md`（带 `source` / `title` / `fetchedAt` frontmatter）；
+  增量清单是各源目录内的 `.nx-kn-crawl.json`（`url → { file, hash }`）
+- `sources/` 跟着 store 走（同一个数据目录），所以 `NX_KN_STORE` / `--store` 一次搬动全部数据
 - 环境变量 `NX_KN_VAULT` 可临时指定「只看这一个目录」（不落盘、不改列表）
+- 环境变量 `NX_KN_CRAWL_DELAY_MS` 改抓取间隔（默认 300ms）
 - 索引落在各库自己的 `<vault>/.zvec-grep/`（zg 拥有；删掉它 = 那个库回到未索引状态）
 - 删除数据 = 删 store.json（无隐藏状态）
 
@@ -106,3 +141,4 @@ CLI 与 Web 面板共享同一份 action 声明。
 
 - `00-design.md` —— 架构与不变量的完整阐述（改动核心代码前必读）
 - `10-knowledge-base.md` —— 知识库检索域：多库管理、收录范围、模型切换、结果格式与排障
+- `20-external-collection.md` —— 外部资料采集域：抓取范围与礼貌、清洗规则、增量判定、落盘布局与排障
