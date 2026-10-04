@@ -167,6 +167,37 @@ export function parseStatus(stdout) {
   };
 }
 
+// `zg index` 的收尾统计（实测 0.2.2）：
+//
+//   files	3 scanned, 1 added, 0 modified, 0 retried, 2 unchanged, 0 deleted, 0 failed
+//   entities	1
+//   duration	11s (11307ms)
+//
+// 这行是「index 默认就是增量」的直接证据：`1 added` 与 `2 unchanged` 并列出现时，
+// 说明只有新文件被嵌入、已有向量原样保留。解析出来给 CLI 与面板展示，
+// 免得「跑了一次索引」到底是全量重算还是只补了增量，只能靠用户猜。
+export function parseIndexSummary(stdout) {
+  const text = String(stdout || '');
+  const pick = (word) => {
+    const m = text.match(new RegExp('([\\d,]+)\\s+' + word + '\\b'));
+    return m ? Number(m[1].replace(/,/g, '')) : null;
+  };
+  const ent = text.match(/entities\s+([\d,]+)/i);
+  const dur = text.match(/duration\s+([\d.]+)\s*(ms|s)\b/);
+
+  return {
+    scanned: pick('scanned'),
+    added: pick('added'),
+    modified: pick('modified'),
+    changed: pick('changed'),
+    unchanged: pick('unchanged'),
+    deleted: pick('deleted'),
+    failed: pick('failed'),
+    entities: ent ? Number(ent[1].replace(/,/g, '')) : null,
+    durationMs: dur ? Math.round(Number(dur[1]) * (dur[2] === 's' ? 1000 : 1)) : null,
+  };
+}
+
 // `zg query` 的 agent markdown 形态（0.2.2 实测，--json 已不可用）：
 //
 //   query groups (1):
@@ -186,7 +217,21 @@ export function parseStatus(stdout) {
 //
 // 解析要点：命中头是行首的 `#<n> matchedBy=`，而**片段正文里的 `#` 标题在行号
 // 之后**（`6\t# xxx`），两者不会混淆——所以 HIT_RE 必须锚定行首。
-const HIT_RE = /^#(\d+)\s+matchedBy=(\S+)\s+(.+):(\d+)-(\d+)\s*$/;
+//
+// ---- 关于 score（多库合并排序的依据）----
+//
+// 加 `--trace` 后，命中头会多出一个 `score=` 字段（实测 0.2.2）：
+//
+//   #1 matchedBy=fts+vector score=0.0328 a.md:1-3
+//
+// 该值是 zg 的内部融合分（标准 RRF：`2/61 = 0.032787`、`1/61 ≈ 0.0164`），
+// 由**排名**派生而非原始相似度，因此**跨 workspace / 跨索引可以相互比较**——
+// 这正是「多个知识库一起检索」时能把命中排成一张统一列表的唯一依据。
+//
+// ⚠️ 陷阱：score 出现在 path 之前，若正则不显式吃掉它，`(.+)` 会贪婪地把
+// `score=0.0328 ` 连同路径一起匹配进去，`hit.path` 静默变成 `"score=0.0328 a.md"`。
+// 不报错、不崩，只是命中路径全错——所以 score 必须是**显式可选捕获组**。
+const HIT_RE = /^#(\d+)\s+matchedBy=(\S+)\s+(?:score=([\d.eE+-]+)\s+)?(.+):(\d+)-(\d+)\s*$/;
 const GROUP_RE = /^Q(\d+)\s+\[([^\]]+)\]:\s*(.*)$/;
 const SNIPPET_RE = /^(\d+)\t(.*)$/;
 
@@ -203,12 +248,16 @@ export function parseQuery(stdout) {
 
     const hit = line.match(HIT_RE);
     if (hit) {
+      const score = hit[3] === undefined ? NaN : Number(hit[3]);
       cur = {
         n: Number(hit[1]),
         matchedBy: hit[2].split('+').filter(Boolean),
-        path: hit[3],
-        start: Number(hit[4]),
-        end: Number(hit[5]),
+        // 没加 --trace 时为 null（不是 0）：0 会被上层当成「最差命中」，
+        // 而 null 明确表示「本次没取到分数」。
+        score: Number.isFinite(score) ? score : null,
+        path: hit[4],
+        start: Number(hit[5]),
+        end: Number(hit[6]),
         heading: null,
         headingLevel: null,
         snippet: '',

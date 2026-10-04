@@ -1,18 +1,25 @@
 # 10 · 知识库检索域（kb）
 
-> 本文讲**怎么用**这一域：命令细节、收录范围、结果格式、排障。
+> 本文讲**怎么用**这一域：多库管理、命令细节、收录范围、结果格式、排障。
 > 「这一域内部怎么改代码」属于项目仓库的 README，不在随包手册里。
 
 ## 一、它是怎么工作的
 
+一个知识库 = 一个目录（通常是一个 Obsidian vault）。**可以加多个**，
+每个库各自一份索引；检索时逐库召回，再按融合分并成一张列表。
+
 ```
-Obsidian vault (.md)
-      │  nx-kn index        →  zg index <vault> -t md -g '!.obsidian/**' -g '!.trash/**'
-      ▼
-<vault>/.zvec-grep/          →  files.zvec（文件元数据） + index.zvec（片段：文本 + 向量 + 倒排）
-      │  nx-kn query "问句"   →  zg query（**子进程 cwd = vault**）
-      ▼
-三路召回 → RRF 融合 → 返回 vault 内相对路径 + 行号 + 片段
+D:\Notes\Work   (.md)  ──┐  nx-kn index
+D:\Obsidian Vault (.md) ─┤  （默认全部库；--root 只处理一个）
+                         ▼
+   每个库各自： zg index <库根> -t md -g '!.obsidian/**' -g '!.trash/**'
+                         ▼
+   <库根>/.zvec-grep/  →  files.zvec + index.zvec（文本 + 向量 + 倒排）
+                         │  nx-kn query "问句"
+                         ▼
+   逐库召回（子进程 cwd = 各自库根）→ 各带 RRF 融合分
+                         ▼
+   按 score 合并排序 → 一张列表，每条标出所属库
 ```
 
 三路各管一件事，这也是「问句含糊也能召回」的原因：
@@ -23,31 +30,60 @@ Obsidian vault (.md)
 | FTS 关键词 | 分词后的倒排匹配（jieba，中文友好） | `fts` |
 | 向量语义 | 意思相近但不含原词的段落 | `vector` |
 
-## 二、收录范围（`nx-kn index` 的默认口径）
+**为什么不是「一个大索引」**：zg 的索引按 workspace 根组织（`<root>/.zvec-grep/`），
+没有「把两个目录塞进一个索引」的命令。硬做只能建一个包含两库的父目录，而两个
+vault 往往在不相干的路径上。所以 nx-kn 选择记住多个根、检索时合并——
+副产品是**每个库可以用不同的 embedding 模型**。
+
+## 二、多库管理
+
+```bash
+nx-kn kb add D:\Notes\Work            # 加一个库（kb use 是同义别名）
+nx-kn kb add "D:\Obsidian Vault" --model local/qwen3-embedding-0.6b
+nx-kn kb list                         # 看有哪些库、各自索引到哪一步
+nx-kn kb remove D:\Notes\Work         # 解除登记（不删磁盘上的索引）
+```
+
+- 按**绝对路径**去重：同一个目录加两次只会有一条记录
+- 路径不存在时直接拒绝（不会登记一个假路径）
+- `remove` 只解除登记。索引是 zg 的产物、留在原库根下；要真删掉跑
+  `zg index <库根> --drop`
+- **某个库的目录被删/移走不会让整条命令失败**：它会显示成「目录不存在」，
+  其余库照常工作。查询时该库记入「跳过」而不是整体报错
+
+## 三、收录范围（`nx-kn index` 的默认口径）
 
 - **只收 markdown**（`-t md`）。要连 `.txt` 一起收：`nx-kn index --types md,txt`
 - **排除** `.obsidian/`（配置、主题、插件）与 `.trash/`（已删笔记）
+- 实测数据：一个 551 篇 md 的 vault 里，`.obsidian/` 独占 325 篇（59%）——
+  排除规则不是可选项
 - 这两者以 `.` 开头，zg 默认本就不扫隐藏路径，所以默认结果是对的；
   显式写排除是为了不把正确性寄托在别人的默认值上
 - 空文件、二进制附件不进索引；图片 / PDF 不在范围内
 
-## 三、建立与更新索引
+## 四、建立与更新索引
 
 ```bash
-nx-kn kb use D:\Notes\MyVault   # 第一次：设定知识库（只需一次）
-nx-kn index                     # 建索引；之后改完笔记再跑它就增量更新
-nx-kn index --rebuild           # 全量重建（换模型、或索引疑似损坏时）
+nx-kn index              # 增量：只处理新增 / 改动 / 删除的文件（**默认**）
+nx-kn index --rebuild    # 全量重建（换模型、或索引疑似损坏时）
+nx-kn index --root D:\Notes\Work   # 只处理其中一个库
 ```
 
-- **增量**：`nx-kn index` 会比对已有索引，只处理新增/改动/删除的文件
+**默认就是增量**（zg 0.2.2 实测）：加 1 篇新笔记后跑一次不带 `--rebuild` 的 index，
+返回 `3 scanned, 1 added, 2 unchanged` —— 已建向量原样保留，只嵌入了新笔记。
+所以日常「改完笔记补索引」用 `nx-kn index` 就够了，**不要习惯性加 `--rebuild`**：
+那会把整个库重新嵌入一遍，大 vault 上要等很久。
+
 - **换模型必须 `--rebuild`**：已有索引锁定了旧模型的向量维度，普通 index 不能混用；
   nx-kn 会在你忘加时直接拒绝并说明原因
+- 面板上是两个按钮：「更新索引」（增量）与「重建索引」（全量，有二次确认）
 - 首次索引要下载本地模型（`local/*`）或联网调远程 embedding，会明显慢一些；
   之后快很多
-- Windows 上并发跑两次 `index` 可能看到 `Cleanup of retired segment failed` 警告——
-  zg 底层文件锁导致的残留清理提示，不影响索引结果；串行跑即可避免
+- 多库是**串行**建索引的：同时跑会抢模型与磁盘，实测会出现
+  `Cleanup of retired segment failed` 之类的残留告警。串行换来确定的顺序与可读日志
+- Windows 上并发跑两次 `index` 也可能看到同样的警告——不影响索引结果，串行即可避免
 
-## 四、检索结果的读法
+## 五、检索结果的读法
 
 ```bash
 nx-kn query "登录页为什么提示超时"
@@ -55,51 +91,74 @@ nx-kn query "登录页为什么提示超时"
 
 ```
 [nx-kn 知识库召回]
-知识库根: D:\Notes\MyVault
-命中路径为 vault 内相对路径；要读全文直接拼绝对路径: <知识库根>/<相对路径>
+知识库（2 个）:
+  [nx-kn-smoke] D:\DevProjects\my\github\nx-kn-smoke
+  [Work]        D:\Notes\Work
+命中路径是**所属库内**的相对路径；读全文拼 <该库的根>/<相对路径>
 
-#1 notes/登录超时排查.md:6-15   [fts+vector]   登录超时排查记录
-    # 登录超时排查记录
-    升级至 8.60.17 后登录页出现「登录超时」提示。
+#1 [nx-kn-smoke] notes/登录超时排查.md:1-2   [fts+vector]   score 0.0328
+    ---
+    title: 登录超时排查
+#2 [Work] notes/鉴权设计.md:31-48   [fts+vector]   score 0.0321
+    ...
 ```
 
-- 要读全文：`D:\Notes\MyVault\notes\登录超时排查.md` 的第 6–15 行
+- **先找到库、再拼路径**：`[nx-kn-smoke]` + `notes/登录超时排查.md`
+  → `D:\DevProjects\my\github\nx-kn-smoke\notes\登录超时排查.md` 的第 1–2 行
+- 只检索一个库（例如用 `--root` 指定）时，输出**不带** `[库名]` 前缀——
+  此时唯一的库根就是归属
+- `score` 是 zg 的融合分（RRF，由排名派生）。它**跨库可比**，多库合并后的顺序
+  就是按它排的；同一个问题在两个库里排第 1 的命中会得到相同的 score
 - `[fts+vector]` = 关键词与语义两路都命中，通常比只有 `[vector]` 的更可信
 - frontmatter（`---` / `title:` / `tags:`）**按原文索引**，所以它有时会占掉一两条命中位；
   这是刻意保留的——按 tags 搜笔记是常见用法
 - `--preview short|full` 控制片段长度；`--preview none` 只给路径与行号（省 token）
-- `--limit N` 返回条数上限（默认 7）
+- `--limit N` 是**合并后的**条数上限（默认 7），不是每个库各 N 条
 - 结果**已融合**（内部固定加 `zg --fuse`）：无论问句多长，都是一条统一排序的列表。
   不加融合时 zg 会按词拆成多个分组、每组各返回 N 条并互相重复——
-  一个三词问句会回来三倍命中，其中大半是同一条的副本，所以这里默认融合。
+  一个三词问句会回来三倍命中，其中大半是同一条的副本，所以这里默认融合
 
-## 五、排障
+## 六、排障
 
 | 症状 | 原因 | 处理 |
 | --- | --- | --- |
 | `zg 不可用`（`EXTERNAL`） | 没装召回引擎 | `npm install -g @zvec/zvec-grep`（需 Node ≥ 22） |
-| `还没有设定知识库目录` | 没跑过 `kb use` | `nx-kn kb use <vault路径>` |
-| query 返回 `needIndex: true` | 还没建索引 | `nx-kn index` |
-| `status` 显示「索引待更新」 | 笔记有新增或改动 | `nx-kn index`（增量，不用 `--rebuild`） |
+| `还没有添加知识库目录` | 列表是空的 | `nx-kn kb add <vault路径>` |
+| 某个库显示「目录不存在」 | 目录被删/移走/改名 | 重新 `kb add` 新路径，或 `kb remove` 掉旧记录 |
+| query 返回 `needIndex: true` | 所有库都没建索引 | `nx-kn index` |
+| query 结果里有「跳过 […]」 | 那一个库目录丢了或召回失败 | 看 `status --json` 里该库的 `hint`；其余库结果仍然可用 |
+| 结果里出现同一篇笔记两次 | 两个库有目录嵌套（同一文件被两个索引各收一次） | 只登记父目录，或把其中一个库移出列表 |
+| `status` 显示「索引待更新」 | 该库笔记有新增或改动 | `nx-kn index`（增量，不用 `--rebuild`） |
 | 覆盖度不是 100% | 有空文件，或索引建在半途 | 看一眼 `status --json` 的 `files/filesTotal`；必要时 `--rebuild` |
-| 中文召回不准 | 用的是英文模型 | 换中文模型后 **必须** `--rebuild`（见下） |
+| 中文召回不准 | 那个库用的是英文模型 | 换中文模型后 **必须** `--rebuild`（见下） |
+| 找不到「模型」该填什么 | 面板里显示「（未记录）」 | 索引没建时就是这么显示的；建完会显示实际生效的模型 |
 
-## 六、embedding 模型
+## 七、embedding 模型（**每库一个**）
+
+模型是**每个库各自的属性**：两个库可以用不同模型、不同维度，互不影响
+（正因如此才不能用一个大索引）。
+
+```bash
+# 建索引时指定（新库直接用这个模型；已建过则必须叠加 --rebuild）
+nx-kn index --model local/qwen3-embedding-0.6b --rebuild
+
+# 只对某个库换模型
+nx-kn index --root D:\Notes\Work --model qwen/text-embedding-v4 --rebuild
+```
 
 | 模型 | 维度 | 说明 |
 | --- | --- | --- |
-| `local/qwen3-embedding-0.6b` | 1024 | 本地、离线、免 key；中文可用。首次索引时自动下载 |
+| `local/qwen3-embedding-0.6b` | 1024 | **默认**。本地、离线、免 key；中文可用。首次索引时自动下载 |
 | `local/potion-multilingual-128m` | 256 | 本地小模型，快；质量低于 0.6b |
 | `qwen/qwen3.7-text-embedding` | 1024 | 远程（需 qwen API key），长文档强 |
 | `qwen/text-embedding-v4` | 1024 | 远程，经典款，8K 输入 |
 
-```bash
-# 换模型（必须 --rebuild）
-nx-kn index --model qwen/qwen3.7-text-embedding --rebuild
+不指定 `--model` 时的取用顺序：**已建索引里实际生效的 → 这个库登记时记的 →
+内置默认 `local/qwen3-embedding-0.6b`**。最后一层保证了在一台从未配置过 zg 的
+机器上，「添加目录 → 更新索引」这条最普通的路径也能一次跑通。
 
-# 远程模型需要的凭据写在 zg 的全局配置里（nx-kn 不接触 key）
-zg config provider set qwen --api-key sk-xxxx
-```
-
-> 换模型后要**对整个 vault 重建**：向量维度不同，不能在同一索引里混用。
-> 面板上的「重建索引」按钮与 `nx-kn index --rebuild` 是同一条命令。
+> 远程模型需要的凭据写在 zg 的全局配置里（nx-kn 不接触 key）：
+> ```bash
+> zg config provider set qwen --api-key sk-xxxx
+> zg auth grant <库根> --capability embedding --scope workspace
+> ```

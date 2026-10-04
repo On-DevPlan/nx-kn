@@ -33,6 +33,16 @@ export const VAULT_ENV = 'NX_KN_VAULT';
 // 一旦哪天加了 --hidden，或 zg 改了默认，排除名单在这里能兜住。
 export const VAULT_EXCLUDES = ['.obsidian', '.trash'];
 
+// 建索引时的默认 embedding 模型。
+//
+// zg 的约束是「新索引必须显式给 --embedding，或已配置全局默认，二者之一」，
+// 而本机 `~/.zvec-grep/config.json` 根本不存在（我们也不代用户配）——
+// 没有这个默认值，`nx-kn index` 在一台干净的机器上必然报错。
+//
+// 选本机离线模型而不是远程 qwen：免 key、不走网络（会话代理也拦不到）、
+// 中文可用，1024 维。要换远程模型仍然可以 `--model` + `--rebuild`。
+export const DEFAULT_EMBEDDING = 'local/qwen3-embedding-0.6b';
+
 
 // 测试必须能指向临时目录，否则会写脏用户的真实数据。
 export const STORE_ENV = 'NX_KN_STORE';

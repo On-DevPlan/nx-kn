@@ -4,6 +4,51 @@
 
 ## [Unreleased]
 
+### Added — 多知识库（多个 vault 一起检索）
+
+- **`kb.vault`（单值）→ `kb.vaults[]`（列表）**：可以添加多个目录，检索时逐库召回再合并。
+  读取老 `store.json` 时自动迁移（`normalizeKb`），无需迁移脚本
+- 新增 `kb add` / `kb remove` / `kb list` 三条 action（`kb use` 保留为 `kb add` 的同义别名）；
+  `add` 支持 `--model`，把「这个库建索引用哪个模型」跟着库一起记
+- **跨库合并**：`query` 对每个库各跑一次 `zg query --fuse --trace`（cwd = 各自库根），
+  按 `score`（RRF 融合分，由排名派生、跨库可比）合并排序，切到 `--limit`。
+  命中带 `vault` / `vaultName`，输出与文档都标出「读全文该拼哪个库根」
+- `index` 默认处理**全部库**（`--root` 缩到单个）；多库串行执行，逐库汇报
+  新增/改动/删除/未变与覆盖度
+- `status` 逐库给出笔记数、覆盖度、**实际生效的模型**、待更新标记与各自的下一步提示；
+  同时给一份 `totals` 聚合视图。多库探测**并发**执行，面板首屏不随库数线性变慢
+- 单个库目录丢失或召回失败**不再拖垮整次操作**：`status` 标「目录不存在」，
+  `query` 把它记入 `skipped[]`，其余库照常返回
+
+### Changed
+
+- **默认 embedding 模型**：`paths.js` 新增 `DEFAULT_EMBEDDING = 'local/qwen3-embedding-0.6b'`。
+  取用顺序为「命令行显式 → 已建索引实际生效的 → 该库登记的 → 内置默认」。
+  本机 `~/.zvec-grep/config.json` 不存在（既无 key 也无全局默认），没有这一层，
+  「添加目录 → 更新索引」在干净机器上必然失败
+- **迁移时丢弃旧的全局 `kb.model`**：它是单值字段，`kb use` 切库时被原样保留，
+  实测出现过「store 记着 `local/potion-code-16m-v2`、磁盘上没有任何该模型的索引、
+  实际索引用的是 `qwen3-embedding-0.6b`」的状态。把它写进每库记录等于把一个
+  已知脏值升级成「下次建索引时静默生效的参数」，因此迁移只带 `path` / `name`
+
+### Fixed
+
+- **`zg query --trace` 的 `score=` 会静默污染路径**：命中头形如
+  `#1 matchedBy=fts+vector score=0.0328 a.md:1-3`，而 `HIT_RE` 的 `(.+)` 是贪婪的，
+  会把 `score=0.0328 ` 连同路径一起吞下——`path` 变成 `"score=0.0328 a.md"`，
+  不报错、只是路径全错。改为显式可选捕获组，`score` 落成数字（无 `--trace` 时为 `null`），
+  并补单测钉住
+- **面板「重建索引」是唯一入口**：增量能力在 CLI 一直有（`zg index` 默认就是增量），
+  但面板只暴露 `--rebuild`，用户看到的就是「索引只能被整体替换」。现在拆成
+  「更新索引」（增量）与「重建索引」（全量，带二次确认）
+- **无索引时「模型」行显示的是上一个库的残留值**：`status` 不再回落到 store 的
+  全局 model，索引不存在就显示「（未记录）」；`kb list` 把登记时的模型单独挂在
+  `plannedModel` 上，措辞明确为「建时计划用 X」
+- **面板无法管理多目录**：改为目录列表（名称/路径/笔记数/覆盖度/模型/待更新徽标 + 移除），
+  「添加目录」弹窗同时收集路径与模型（后者默认 `local/qwen3-embedding-0.6b`）
+- `useDialog` 支持多字段形态（`fields: [...]`），避免「加目录」要弹两次窗、
+  中途取消留下半配置
+
 ### Added — kb 域（Obsidian 知识库检索）
 
 - `core/zg.js`：zg（zvec-grep）进程驱动 + 输出解析（`zg query --json` 在 0.2.2 已移除，

@@ -14,7 +14,7 @@ const FORM = [
 ];
 
 export default function SettingsView() {
-  const { toast } = useToast();
+  const toast = useToast();
   const { boot } = useStore();
   const appName = boot?.app?.name || 'app';
   const [draft, setDraft] = useState({});

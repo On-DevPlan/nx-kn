@@ -27,7 +27,14 @@ export function ToastProvider({ children }) {
 }
 
 export function useToast() {
-  return useContext(ToastCtx) || ((m) => console.log(m));
+  const toast = useContext(ToastCtx) || ((m) => console.log(m));
+  // 这个 hook 返回的是**函数本身**（正确用法：const toast = useToast()）。
+  // 但 `const { toast } = useToast()` 是极容易写错的一种——而且写错后**不报错、不白屏**：
+  // toast 变 undefined，提示静默消失，紧跟其后的代码还会被 TypeError 打断
+  // （典型后果：写操作成功了，但 refresh() 没跑，界面看起来「没反应」）。
+  // 模板自带的 settings 视图就踩了这个坑，所以这里补一层自引用把该写法兜住。
+  toast.toast = toast;
+  return toast;
 }
 
 // 操作守卫：包一层，失败自动 toast 错误信息（对应 vanilla 版的 guard()）
@@ -73,12 +80,20 @@ export function Copyable({ text, className = '', title, children }) {
 }
 
 // ---- 对话框：确认 / 输入（Promise 风格，对应 vanilla 版 dialog()） ----
-
+//
+// 三种形态，都返回 Promise，取消一律 resolve(null)：
+//   确认   dialog({ title, message, okText })            → true | null
+//   单输入 dialog({ input: true, value, placeholder })   → string | null
+//   多输入 dialog({ fields: [{key,label,value,placeholder}] }) → { key: string } | null
+//
+// 为什么补多输入：加知识库要同时给「目录」和「embedding 模型」两个值，
+// 分两次弹窗会让中途取消留下半配置（目录加了、模型没给）。
 export function useDialog() {
   const [state, setState] = useState(null); // {resolve, ...opts}
   // 用 ref 读输入框，而不是 document.querySelector('.dlg-input')——
   // 后者绕开 React 直接摸 DOM，页面上有第二个同名类名时就会读错。
   const inputRef = useRef(null);
+  const fieldRefs = useRef([]);
 
   const close = useCallback((val) => {
     setState((s) => { if (s && s.resolve) s.resolve(val); return null; });
@@ -88,37 +103,67 @@ export function useDialog() {
     setState({ ...opts, resolve });
   }), []);
 
-  const node = state ? (
-    <div className="dlg" onMouseDown={(e) => { if (e.target === e.currentTarget) close(null); }}>
-      <div className="dlg-box">
-        {state.title ? <div className="dlg-title">{state.title}</div> : null}
-        {state.message ? <div className="dlg-msg">{state.message}</div> : null}
-        {state.input ? (
-          <input
-            ref={inputRef}
-            className="dlg-input"
-            autoFocus
-            spellCheck="false"
-            placeholder={state.placeholder || ''}
-            defaultValue={state.value || ''}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter') close(e.currentTarget.value.trim());
-              if (e.key === 'Escape') close(null);
-            }}
-          />
-        ) : null}
-        <div className="dlg-acts">
-          <button className="btn ghost" onClick={() => close(null)}>取消</button>
-          <button
-            className={'btn' + (state.danger ? ' danger' : '')}
-            onClick={() => close(state.input ? (inputRef.current?.value.trim() ?? null) : true)}
-          >
-            {state.okText || '确定'}
-          </button>
-        </div>
-      </div>
-    </div>
-  ) : null;
+  const node = state
+    ? (() => {
+        const submit = () => {
+          if (Array.isArray(state.fields)) {
+            const out = {};
+            state.fields.forEach((f, i) => {
+              out[f.key] = (fieldRefs.current[i]?.value ?? '').trim();
+            });
+            close(out);
+          } else {
+            close(state.input ? (inputRef.current?.value.trim() ?? null) : true);
+          }
+        };
+        const onKey = (e) => {
+          if (e.key === 'Enter') submit();
+          if (e.key === 'Escape') close(null);
+        };
+        return (
+          <div className="dlg" onMouseDown={(e) => { if (e.target === e.currentTarget) close(null); }}>
+            <div className="dlg-box">
+              {state.title ? <div className="dlg-title">{state.title}</div> : null}
+              {state.message ? <div className="dlg-msg">{state.message}</div> : null}
+              {Array.isArray(state.fields) ? (
+                <div className="dlg-fields">
+                  {state.fields.map((f, i) => (
+                    <label className="dlg-field" key={f.key}>
+                      {f.label ? <span className="dlg-field-label">{f.label}</span> : null}
+                      <input
+                        className="dlg-input"
+                        autoFocus={i === 0}
+                        spellCheck="false"
+                        placeholder={f.placeholder || ''}
+                        defaultValue={f.value || ''}
+                        onKeyDown={onKey}
+                        ref={(el) => { fieldRefs.current[i] = el; }}
+                      />
+                    </label>
+                  ))}
+                </div>
+              ) : state.input ? (
+                <input
+                  ref={inputRef}
+                  className="dlg-input"
+                  autoFocus
+                  spellCheck="false"
+                  placeholder={state.placeholder || ''}
+                  defaultValue={state.value || ''}
+                  onKeyDown={onKey}
+                />
+              ) : null}
+              <div className="dlg-acts">
+                <button className="btn ghost" onClick={() => close(null)}>取消</button>
+                <button className={'btn' + (state.danger ? ' danger' : '')} onClick={submit}>
+                  {state.okText || '确定'}
+                </button>
+              </div>
+            </div>
+          </div>
+        );
+      })()
+    : null;
 
   return { dialog, node };
 }

@@ -20,6 +20,12 @@
 .dlg-title { font-weight: 700; font-size: 12px; margin-bottom: 6px; }
 .dlg-msg { color: var(--mid); font-size: 12px; margin-bottom: 12px; word-break: break-word; }
 .dlg-input { width: 100%; margin-bottom: 14px; }
+/* 多字段形态：字段自带间距，输入框自己不再撑 margin（否则一行两处间距） */
+.dlg-fields { margin-bottom: 14px; }
+.dlg-field { display: block; }
+.dlg-field + .dlg-field { margin-top: 10px; }
+.dlg-field-label { display: block; color: var(--mid); font-size: 11px; margin-bottom: 4px; }
+.dlg-field .dlg-input { margin-bottom: 0; }
 .dlg-acts { display: flex; justify-content: flex-end; gap: 8px; }
 
 .modal-box {

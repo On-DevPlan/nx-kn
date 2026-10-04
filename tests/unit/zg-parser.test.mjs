@@ -47,6 +47,7 @@ test('parseQuery: 命中头 / 行号范围 / matchedBy 拆分', () => {
   assert.deepEqual(r.hits[0], {
     n: 1,
     matchedBy: ['fts', 'vector'],
+    score: null,
     path: 'notes/登录超时排查.md',
     start: 1,
     end: 2,
@@ -130,12 +131,45 @@ test('parseQuery: 片段里的空行被保留（输出中是 `7\\t`，不能因 
 
 // ---- 调用口径的防回归断言 ----
 
-test('查询固定走 --fuse（不加会把问句按词拆成多组、重复返回）', () => {
+test('parseQuery: --trace 的 score= 被解析成数字，且不污染 path（贪婪匹配陷阱）', () => {
+  // 实测样本：加 --trace 后命中头多一个 score= 字段，位置在 path **之前**。
+  // 若正则不显式吃掉它，`(.+)` 会把 `score=0.0328 ` 连同路径一起吞下，
+  // path 静默变成 `"score=0.0328 notes/x.md"` —— 不报错、只是路径全错。
+  const raw = [
+    'query groups (1):',
+    'Q1 [primary]: 登录超时',
+    'hits: 2',
+    '',
+    '#1 matchedBy=fts+vector score=0.0328 notes/登录超时排查.md:1-3',
+    '1\t---',
+    'trace: query "登录超时": fts #1, vector #1; fused #1',
+    '',
+    '#2 matchedBy=vector score=0.0161 notes/主题.md:7-9',
+    '7\t主题系统',
+  ].join('\n');
+  const r = parseQuery(raw);
+  assert.equal(r.hits.length, 2, 'trace 行不能被当成命中头（HIT_RE 锚定行首 #<n>）');
+  assert.equal(r.hits[0].path, 'notes/登录超时排查.md');
+  assert.equal(r.hits[0].start, 1);
+  assert.equal(r.hits[0].end, 3);
+  assert.equal(r.hits[0].score, 0.0328);
+  assert.equal(r.hits[1].path, 'notes/主题.md');
+  assert.equal(r.hits[1].score, 0.0161);
+});
+
+test('parseQuery: 无 score（未加 --trace）时 score 为 null 而非 0', () => {
+  const r = parseQuery('#1 matchedBy=rg a.md:1-1\n1\tx\n');
+  assert.equal(r.hits[0].score, null, 'null = 「本次没取到分数」；0 会被误当成最差命中');
+  assert.equal(r.hits[0].path, 'a.md');
+});
+
+test('查询固定走 --fuse 与 --trace', () => {
   // 实测：`query "Scenario DSL 场景怎么写"` 不加 --fuse 时回来 3 组 × limit 条，
   // 大半是同一条的副本；加 --fuse 才是统一排序的列表。删掉这个 flag 不会报错，
   // 只会让结果悄悄变差——所以在此钉住（同 consistency.test.mjs 的读源码断言套路）。
   const src = readFileSync(join(SRC, 'modules', 'kb', 'service.js'), 'utf8');
   assert.match(src, /'--fuse'/, 'kb/service.js 的 query 必须带 --fuse');
+  assert.match(src, /'--trace'/, 'query 必须带 --trace：多库合并要靠 score 排序，没有分数就只能瞎排');
   assert.match(src, /cwd: dir/, 'zg query 没有 root 参数，必须 cwd = vault 运行');
 });
 
