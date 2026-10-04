@@ -8,7 +8,7 @@
 // - 进程内缓存 + mtime 失效检测：外部进程（如 CLI）改写后，Web 服务侧能立刻看到
 // - 自己写入后主动刷新缓存 mtime，避免「自己触发自己重读」
 import fsp from 'node:fs/promises';
-import { basename, dirname } from 'node:path';
+import { dirname } from 'node:path';
 import { storePathFromEnv } from './paths.js';
 
 // 项目自己的初始结构。改这里即可扩展存储，老数据由 normalize 自动补齐。
@@ -153,10 +153,19 @@ function normalizeVault(v) {
   const obj = v && typeof v === 'object' ? v : {};
   return {
     path: String(path),
-    name: obj.name ? String(obj.name) : basename(String(path)),
+    name: obj.name ? String(obj.name) : displayNameOf(String(path)),
     model: obj.model ? String(obj.model) : null,
     addedAt: obj.addedAt ? String(obj.addedAt) : null,
   };
+}
+
+// 取路径最后一段当显示名。**刻意不用 path.basename**：它只认当前平台的分隔符，
+// 而这里读的是「可能由另一个系统写下的」store.json —— POSIX 上
+// `basename('D:\\Notes\\Vault')` 返回的是整串路径（反斜杠不是分隔符），
+// 于是迁移出来的 name 变成一条完整路径。显示名与平台无关，两种分隔符都要认。
+function displayNameOf(p) {
+  const parts = String(p).split(/[\\/]+/).filter(Boolean);
+  return parts.length ? parts[parts.length - 1] : String(p);
 }
 
 // 测试与调试用：清掉进程内缓存，强制下次重读
