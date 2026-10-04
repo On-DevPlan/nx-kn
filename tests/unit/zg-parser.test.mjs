@@ -173,6 +173,21 @@ test('查询固定走 --fuse 与 --trace', () => {
   assert.match(src, /cwd: dir/, 'zg query 没有 root 参数，必须 cwd = vault 运行');
 });
 
+test('runZg: Windows 走外层引号 + windowsVerbatimArguments（空格参数回归）', () => {
+  // cmd.exe 会把命令行**再解析一遍**。若像普通 spawn 那样把整行当「一个含空格的参数」
+  // 交给 Node，Node 会套引号并把内层 `"` 转义成 `\"`——而 cmd 不认 `\"`，
+  // 于是 `"D:\My Vault"` 被切回两个参数，zg 报 `accepts at most one root path`。
+  // 后果远超路径：`query "多个 词"` 这种**参数里有空格**的调用一律坏掉。
+  //
+  // 修复靠两件事同时在场，缺任一都会复发，所以两条都钉住：
+  //   1) 命令行由我们自己带外层引号（cmd 的 /s 专门负责剥掉它）
+  //   2) windowsVerbatimArguments 让 Node 原样传递、不再二次转义
+  // （真实行为另有 tests/smoke.mjs 里对 zg 的实测回归盯着。）
+  const src = readFileSync(join(SRC, 'core', 'zg.js'), 'utf8');
+  assert.match(src, /windowsVerbatimArguments:\s*true/, '必须让 Node 原样传参，否则引号被二次转义');
+  assert.match(src, /const line = `"\$\{/, '外层引号必须由我们自己加（cmd 的 /s 会剥掉它）');
+});
+
 // ---- parseStatus ----
 
 test('parseStatus: ready 形态（覆盖条 # 已满）', () => {
@@ -247,4 +262,26 @@ test('parseStatus: 未配置形态', () => {
 test('parseStatus: POSIX 根路径也能识别', () => {
   const s = parseStatus('  /home/u/notes\n  Storage     .zvec-grep/index.zvec\n');
   assert.equal(s.root, '/home/u/notes');
+});
+
+test('parseStatus: 千分位数字不能被截断（1,490 不等于 1）', () => {
+  // 实测 zg 给大数加千分位：`Entities    1,490`。
+  // 模式写成 `(\d+)` 会在**逗号处停下**，1490 被读成 1 —— 面板上就是「1 片段」，
+  // 而 num() 里那句 replace(/,/g,'') 永远等不到逗号，成了摆设。
+  const raw = [
+    '\u2714 Workspace index is ready',
+    '  D:\\Notes\\Big',
+    '',
+    '  Coverage    #################### 100%  1,234 / 1,234 files',
+    '  Entities    1,490',
+    '  Truncated   12 fragments',
+    '  Queue       0 pending \u00b7 0 failed',
+    '  Changes     1,024 added \u00b7 3 modified \u00b7 0 deleted',
+  ].join('\n');
+  const s = parseStatus(raw);
+  assert.equal(s.entities, 1490);
+  assert.equal(s.truncated, 12);
+  assert.equal(s.files, 1234);
+  assert.equal(s.filesTotal, 1234);
+  assert.deepEqual(s.changes, { added: 1024, modified: 3, deleted: 0 });
 });

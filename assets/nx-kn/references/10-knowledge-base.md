@@ -59,7 +59,36 @@ nx-kn kb remove D:\Notes\Work         # 解除登记（不删磁盘上的索引�
   排除规则不是可选项
 - 这两者以 `.` 开头，zg 默认本就不扫隐藏路径，所以默认结果是对的；
   显式写排除是为了不把正确性寄托在别人的默认值上
-- 空文件、二进制附件不进索引；图片 / PDF 不在范围内
+- 图片 / PDF 等二进制附件不在范围内
+
+### zg 还有一套自己的默认忽略（实测 0.2.2）
+
+这几类**根本不会进索引**，也不在 nx-kn 的排除名单里——是 zg 内置的：
+
+| 被跳过 | 说明 |
+| --- | --- |
+| 隐藏目录 / 隐藏文件（`.xxx`） | 含 `.git`、`.zvec-grep`（这两个是硬跳过） |
+| 依赖与产物目录名 | `node_modules`、`vendor`、`dist`、`build`、`out`、`target`、`coverage`、`generated`、`tmp`、`temp`、`logs`、`locale`、`locales`、`translations` 等 |
+| **嵌套 git 仓库整棵** | 子目录里若有 `.git`，整棵跳过——vault 里放着的克隆仓库不会污染你的知识库 |
+| **0 字节空文件** | Obsidian 里点出来的空笔记 |
+
+此外，仓库根与各子目录的 `.gitignore` 规则也会被 zg 遵守。
+
+**所以 `status` 报的「篇数」是「可索引的 md」，不是磁盘上 md 的总数**，
+差额会写明原因：
+
+```
+[Obsidian Vault] D:\Obsidian Vault
+    173 篇 md · Obsidian（另有 1 个克隆仓库、5 篇空文件，zg 默认不收）
+    索引 已建 · 100% 173/173 文件 · 1490 片段   模型 local/qwen3-embedding-0.6b
+```
+
+（这是真实数字：226 篇 md − 48 篇在克隆仓库 `辅助工具/抓包/langgraph-claude-code` 里
+− 5 篇空文件 = 173。**权威数字始终是索引的 `files / filesTotal`**，nx-kn 的计数是估算。）
+
+zg 有 `--no-ignore`（不套默认与 .gitignore 规则）与 `--hidden`（收隐藏路径）两个开关，
+但 nx-kn 的 `index` 目前**不透传**它们。真有需要就直接跑
+`zg index <库根> --no-ignore`（嵌套 git 仓库的排除是另一条独立逻辑，未验证是否一并放行）。
 
 ## 四、建立与更新索引
 
@@ -129,7 +158,9 @@ nx-kn query "登录页为什么提示超时"
 | query 结果里有「跳过 […]」 | 那一个库目录丢了或召回失败 | 看 `status --json` 里该库的 `hint`；其余库结果仍然可用 |
 | 结果里出现同一篇笔记两次 | 两个库有目录嵌套（同一文件被两个索引各收一次） | 只登记父目录，或把其中一个库移出列表 |
 | `status` 显示「索引待更新」 | 该库笔记有新增或改动 | `nx-kn index`（增量，不用 `--rebuild`） |
-| 覆盖度不是 100% | 有空文件，或索引建在半途 | 看一眼 `status --json` 的 `files/filesTotal`；必要时 `--rebuild` |
+| 覆盖度不是 100% | 索引里有文件空了/变二进制，或建在半途 | 看 `status --json` 的 `files/filesTotal`；必要时 `--rebuild` |
+| 笔记数比磁盘上的 md 少 | zg 默认不收克隆仓库 / 空文件 / 隐藏目录（见第三节） | 是预期行为；数字后面会写明原因 |
+| Windows 下「路径带空格就报 `at most one root path`」 | 已修（cmd.exe 引号二次解析） | 升级到本版本；勿自行把 `windowsVerbatimArguments` 去掉 |
 | 中文召回不准 | 那个库用的是英文模型 | 换中文模型后 **必须** `--rebuild`（见下） |
 | 找不到「模型」该填什么 | 面板里显示「（未记录）」 | 索引没建时就是这么显示的；建完会显示实际生效的模型 |
 

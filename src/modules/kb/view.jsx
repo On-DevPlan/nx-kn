@@ -16,6 +16,19 @@ const DEFAULT_MODEL = 'local/qwen3-embedding-0.6b';
 // 多库是串行跑的，所以给一个宽松的上限，避免请求被前端提前掐断。
 const INDEX_TIMEOUT = 900_000;
 
+// 笔记数：与 CLI 同一口径。zg 建索引时会静默跳过克隆仓库、空文件、依赖目录，
+// 只报一个比索引大的数字会让人以为漏索引了——把「少的那些去哪了」一并说出来。
+function notesText(v) {
+  const s = v.notesSkipped || {};
+  const skipped = [];
+  if (s.nestedRepos) skipped.push(`${s.nestedRepos} 个克隆仓库`);
+  if (s.empty) skipped.push(`${s.empty} 篇空文件`);
+  return (
+    `${v.notes} 篇 md${v.obsidian ? ' · Obsidian' : ''}` +
+    (skipped.length ? `（另有 ${skipped.join('、')}，zg 默认不收）` : '')
+  );
+}
+
 export default function KbView() {
   const toast = useToast();
   const { dialog, node: dialogNode } = useDialog();
@@ -165,7 +178,7 @@ export default function KbView() {
               {loading
                 ? pending
                 : st.configured
-                  ? `${totals.vaults} 个 · 索引 ${totals.indexed} 个 · 共 ${totals.notes} 篇 md`
+                  ? `${totals.vaults} 个 · 索引 ${totals.indexed} 个 · 共 ${totals.notes} 篇可索引 md`
                   : '（未添加）'}
             </dd>
           </div>
@@ -203,7 +216,7 @@ export default function KbView() {
             <div className="desc">
               {v.missing
                 ? '路径已失效：重新添加，或从列表移除'
-                : `${v.notes} 篇 md${v.obsidian ? ' · Obsidian' : ''}` +
+                : `${notesText(v)}` +
                   ` · 索引 ${v.indexed ? `${v.index?.files ?? '?'}/${v.index?.filesTotal ?? '?'} 文件 · ${v.index?.entities ?? '?'} 片段` : '未建'}` +
                   ` · 模型 ${v.model || (v.plannedModel ? `（建时用 ${v.plannedModel}）` : '（未记录）')}`}
             </div>

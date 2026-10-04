@@ -77,10 +77,20 @@ export function runZg(args, { cwd, timeoutMs = 120_000 } = {}) {
     let child;
     if (process.platform === 'win32') {
       // 走 cmd.exe：zg.cmd 是个批处理垫片，shell:false 下不可执行。
-      const line = [ZG_BIN, ...args].map(quoteArg).join(' ');
+      //
+      // 引号是这里唯一真正棘手的地方——cmd.exe 会**把命令行再解析一遍**，
+      // 而 Node 的默认 spawn 会自作主张地套一层引号、并把内层 `"` 转义成 `\"`，
+      // cmd 又不认 `\"`。两者叠加的结果：`"D:\My Vault"` 被切回 `\"D:\My` 与
+      // `Vault\"` 两个参数，zg 报 `accepts at most one root path`（本机实测）。
+      // 也就是说——**参数里只要有空格就会坏**，不只路径，`query "多个 词"` 同样中招。
+      //
+      // 正确姿势：外层引号由**我们自己**加（cmd 的 /s 专门负责剥掉它），
+      // 同时声明 windowsVerbatimArguments，让 Node 原样传递、不再二次转义。
+      const line = `"${[ZG_BIN, ...args].map(quoteArg).join(' ')}"`;
       child = spawn('cmd.exe', ['/d', '/s', '/c', line], {
         cwd,
         windowsHide: true,
+        windowsVerbatimArguments: true,
         timeout: timeoutMs,
         maxBuffer: 16 * 1024 * 1024,
       });
@@ -127,17 +137,21 @@ export function assertZgOk(r, what) {
 //
 // 进度条是 `#` 与 `-` 混排（已覆盖 vs 待覆盖），字符类必须把它俩都吃进去——
 // 只写 `#` 时 Coverage 会整条匹配失败，表现为「状态里覆盖度永远是 ?」。
+//
+// 数字一律用 `([\d,]+)`：zg 给大数加千分位（实测 `Entities    1,490`）。
+// 写成 `(\d+)` 会**在逗号处停下**——`1,490` 被读成 `1`，面板上就是「1 片段」，
+// 而 `num()` 里那句 `replace(/,/g,'')` 永远等不到逗号，成了摆设。
 export function parseStatus(stdout) {
   const text = String(stdout || '');
   const num = (re) => {
     const m = text.match(re);
     return m ? Number(String(m[1]).replace(/,/g, '')) : null;
   };
-  const coverage = text.match(/Coverage\s+[^\d\n]*(\d+)%\s+(\d+)\s*\/\s*(\d+)\s+files/);
+  const coverage = text.match(/Coverage\s+[^\d\n]*(\d+)%\s+([\d,]+)\s*\/\s*([\d,]+)\s+files/);
   const dims = text.match(/([\d,]+)\s+dimensions\s*(?:\u00b7|\u2022)?\s*(\w+)?/);
-  const queue = text.match(/Queue\s+(\d+)\s+pending\s*\S*\s*(\d+)\s+failed/);
+  const queue = text.match(/Queue\s+([\d,]+)\s+pending\s*\S*\s*([\d,]+)\s+failed/);
   const changes = text.match(
-    /Changes\s+(\d+)\s+added\s*\S*\s*(\d+)\s+modified\s*\S*\s*(\d+)\s+deleted/
+    /Changes\s+([\d,]+)\s+added\s*\S*\s*([\d,]+)\s+modified\s*\S*\s*([\d,]+)\s+deleted/
   );
 
   return {
@@ -146,14 +160,18 @@ export function parseStatus(stdout) {
     stale: /needs an update/i.test(text),
     root: (text.match(/^\s{2}([A-Za-z]:[\\/][^\s]*|\/[^\s]*)\s*$/m) || [])[1] || null,
     coveragePercent: coverage ? Number(coverage[1]) : null,
-    files: coverage ? Number(coverage[2]) : null,
-    filesTotal: coverage ? Number(coverage[3]) : null,
-    entities: num(/Entities\s+(\d+)/),
-    truncated: num(/Truncated\s+(\d+)/),
-    pending: queue ? Number(queue[1]) : null,
-    failed: queue ? Number(queue[2]) : null,
+    files: coverage ? Number(coverage[2].replace(/,/g, '')) : null,
+    filesTotal: coverage ? Number(coverage[3].replace(/,/g, '')) : null,
+    entities: num(/Entities\s+([\d,]+)/),
+    truncated: num(/Truncated\s+([\d,]+)/),
+    pending: queue ? Number(queue[1].replace(/,/g, '')) : null,
+    failed: queue ? Number(queue[2].replace(/,/g, '')) : null,
     changes: changes
-      ? { added: Number(changes[1]), modified: Number(changes[2]), deleted: Number(changes[3]) }
+      ? {
+          added: Number(changes[1].replace(/,/g, '')),
+          modified: Number(changes[2].replace(/,/g, '')),
+          deleted: Number(changes[3].replace(/,/g, '')),
+        }
       : null,
     embedding: dims
       ? {

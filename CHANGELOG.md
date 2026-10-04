@@ -30,9 +30,27 @@
   实测出现过「store 记着 `local/potion-code-16m-v2`、磁盘上没有任何该模型的索引、
   实际索引用的是 `qwen3-embedding-0.6b`」的状态。把它写进每库记录等于把一个
   已知脏值升级成「下次建索引时静默生效的参数」，因此迁移只带 `path` / `name`
+- **笔记计数改为对齐 zg 的收录口径**：zg 建索引时会静默跳过隐藏目录、它内置的忽略
+  目录名（`node_modules` / `dist` / `build` / `tmp` / `logs` …）、**嵌套 git 仓库整棵**
+  与 0 字节空文件。此前 nx-kn 照实数所有 md，于是在正式 vault 上报出「226 篇」而索引
+  只有 173 篇——差额 48（克隆仓库 `辅助工具/抓包/langgraph-claude-code`）+ 5（空文件）
+  = 53，用户会以为漏索引。现在按同一口径估算，并把差额原因写进 CLI 与面板
+  （「另有 1 个克隆仓库、5 篇空文件，zg 默认不收」）。这只是**估算**：权威数字以索引
+  自己的 `files / filesTotal` 为准
 
 ### Fixed
 
+- **参数含空格时整条 zg 调用被 cmd.exe 切碎**：Windows 上 zg 是 `.cmd` 垫片，必须经
+  `cmd.exe /d /s /c` 调用；而 cmd 会**把命令行再解析一遍**，Node 默认又给整行套引号、
+  把内层 `"` 转义成 `\"`（cmd 不认）。两者叠加使 `"D:\My Vault"` 裂成两个参数，
+  zg 报 `accepts at most one root path` —— 表现为**路径带空格就建不了索引**，
+  而且不止路径：`query "多个 词"` 这类调用同样中招。改为**自己加外层引号**
+  （`cmd` 的 `/s` 专门剥掉它）并声明 `windowsVerbatimArguments`，让 Node 原样传参。
+  真实行为由 smoke 测试驱动真 zg 钉住，源码写法另有单测
+- **千分位数字被截断**：zg 给大数加千分位（实测 `Entities    1,490`），而
+  `parseStatus` 的数字模式写成 `(\d+)`，**在逗号处就停下**——1490 读成 `1`，
+  面板上显示「1 片段」（`num()` 里那句 `replace(/,/g,'')` 永远等不到逗号，成了摆设）。
+  覆盖度、Queue、Changes 同类修复，并补单测
 - **`zg query --trace` 的 `score=` 会静默污染路径**：命中头形如
   `#1 matchedBy=fts+vector score=0.0328 a.md:1-3`，而 `HIT_RE` 的 `(.+)` 是贪婪的，
   会把 `score=0.0328 ` 连同路径一起吞下——`path` 变成 `"score=0.0328 a.md"`，

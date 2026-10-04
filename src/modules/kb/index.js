@@ -31,6 +31,21 @@ function changesLine(c) {
   return parts.length ? parts.join(' / ') : null;
 }
 
+// 笔记数怎么显示：数字 + 「少的那些去哪了」。
+// zg 会静默跳过克隆仓库、空文件、依赖目录（见 service.js 的 countNotes），
+// 只报一个比索引大的数字，用户会以为漏索引了——把差额的原因一并写出来。
+function notesLine(v) {
+  if (v.missing) return '目录不存在';
+  const s = v.notesSkipped || {};
+  const skipped = [];
+  if (s.nestedRepos) skipped.push(`${s.nestedRepos} 个克隆仓库`);
+  if (s.empty) skipped.push(`${s.empty} 篇空文件`);
+  return (
+    `${v.notes} 篇 md${v.obsidian ? ' · Obsidian' : ''}` +
+    (skipped.length ? `（另有 ${skipped.join('、')}，zg 默认不收）` : '')
+  );
+}
+
 export default {
   id: 'kb',
   title: '知识库',
@@ -49,7 +64,7 @@ export default {
       render: (r) =>
         [
           `知识库: ${r.vault}${r.added ? '（已新增）' : '（已在列表中，未重复添加）'}`,
-          `  笔记   ${r.notes} 篇${r.notesTruncated ? '（已截断计数）' : ''}`,
+          `  笔记   ${notesLine(r)}${r.notesTruncated ? '（计数已截断）' : ''}`,
           `  形态   ${r.obsidian ? 'Obsidian vault（含 .obsidian/）' : '普通目录（无 .obsidian/）'}`,
           `  索引   ${indexLine(r)}`,
           r.plannedModel && !r.indexed ? `  模型   建索引时将使用 ${r.plannedModel}` : null,
@@ -87,7 +102,8 @@ export default {
               ? `（未建索引，建时计划用 ${v.plannedModel}）`
               : '（未记录）';
           lines.push(
-            `    ${v.missing ? '目录不存在' : `${v.notes} 篇 md${v.obsidian ? ' · Obsidian' : ''}`}` +
+            `    ${notesLine(v)}` +
+              (v.notesTruncated ? '（计数已截断）' : '') +
               `  索引 ${v.missing ? '—' : indexLine(v)}` +
               `  模型 ${model}`
           );
@@ -191,7 +207,7 @@ export default {
           if (r.hint) lines.push(`          ${r.hint}`);
           return lines.join('\n');
         }
-        lines.push(`知识库    ${r.totals.vaults} 个（索引 ${r.totals.indexed} 个${r.totals.stale ? ` · 待更新 ${r.totals.stale} 个` : ''} · 共 ${r.totals.notes} 篇 md）`);
+        lines.push(`知识库    ${r.totals.vaults} 个（索引 ${r.totals.indexed} 个${r.totals.stale ? ` · 待更新 ${r.totals.stale} 个` : ''} · 共 ${r.totals.notes} 篇可索引 md）`);
         lines.push('');
         for (const v of r.vaults) {
           lines.push(`[${v.name}] ${v.path}`);
@@ -202,7 +218,7 @@ export default {
           const idx = v.index
             ? `${v.index.stale ? '待更新' : '已建'} · ${v.index.coveragePercent ?? '?'}% ${v.index.files ?? '?'}/${v.index.filesTotal ?? '?'} 文件 · ${v.index.entities ?? '?'} 片段`
             : '未建';
-          lines.push(`    ${v.notes} 篇 md${v.obsidian ? ' · Obsidian' : ''}   索引 ${idx}   模型 ${v.model || '（未记录）'}`);
+          lines.push(`    ${notesLine(v)}   索引 ${idx}   模型 ${v.model || '（未记录）'}`);
           if (v.hint) lines.push(`    ${v.hint}`);
         }
         if (r.hint) lines.push('', `提示      ${r.hint}`);

@@ -90,12 +90,37 @@ export async function resolveVaults({ root } = {}) {
 
 // ---- 只读探测：数笔记、认 Obsidian ----
 
-// 递归数 md 文件；跳过排除目录与 zg 自己的索引目录。
-// 上限 5 万个：大 vault 上这条只是「让人心里有数」，不值得为它遍历一整个盘。
+// 递归数**可索引**的 md。上限 5 万个：大 vault 上这条只是「让人心里有数」，
+// 不值得为它遍历一整个盘。
+//
+// 为什么按 zg 的口径数、而不是数所有 md：zg 建索引时会**静默跳过**好几类东西
+// （0.2.2 实测）。若照实报「226 篇」而索引只有 173 篇，用户第一反应是「漏索引了」——
+// 本机那 53 篇的差额全部来自下面第 3、4 条。这里把 zg 的口径近似一遍，
+// 顺手还能回答「少的那些去哪了」：
+//   1. 隐藏目录（`.xxx`）：zg 默认不扫（`.git`、`.zvec-grep` 更是硬跳过）
+//   2. zg 内置的依赖/产物目录名（node_modules、dist、build、tmp、logs …）
+//   3. **嵌套 git 仓库整棵**：子树里有 `.git` 就跳过——克隆下来的仓库不算你的笔记
+//      （本机实测：`辅助工具/抓包/langgraph-claude-code` 正是克隆仓库，一整个 48 篇）
+//   4. 0 字节空文件（本机 5 篇——Obsidian 里点出来的空笔记）
+// 结果只是**估算**：权威数字永远是索引自己的 `files / filesTotal`。
 const COUNT_LIMIT = 50_000;
+
+// 抄自 zg 0.2.2 的 DEFAULT_IGNORED_DIRECTORY_NAMES
+// （@zvec/zvec-grep/dist/engine/pipeline/indexing/scanner/index.js）。
+// 这些名字出现在知识库 vault 里基本都不是笔记，跟着排掉比「全收进来」更贴近预期。
+const ZG_IGNORED_DIRS = new Set([
+  'node_modules', 'vendor', 'thirdparty', 'third_party', 'external', 'deps',
+  'dist', 'build', 'out', 'target', 'coverage', 'generated', '__pycache__',
+  'venv', '.venv', 'env', '.tox', '.eggs', 'Pods', '.next', '.nuxt',
+  '.svelte-kit', '.turbo', '.vite', '.parcel-cache', '.cache', '.gradle',
+  '.pytest_cache', '.mypy_cache', '.ruff_cache', 'tmp', 'temp', 'logs',
+  'locale', 'locales', 'translations',
+]);
 
 async function countNotes(dir, excludes) {
   let count = 0;
+  let empty = 0;
+  let nestedRepos = 0;
   const stack = [dir];
   while (stack.length && count < COUNT_LIMIT) {
     const cur = stack.pop();
@@ -108,13 +133,24 @@ async function countNotes(dir, excludes) {
     for (const e of entries) {
       if (e.isDirectory()) {
         if (excludes.includes(e.name) || e.name === INDEX_DIR) continue;
-        stack.push(join(cur, e.name));
+        if (e.name.startsWith('.') || ZG_IGNORED_DIRS.has(e.name)) continue;
+        const sub = join(cur, e.name);
+        if (existsSync(join(sub, '.git'))) {
+          nestedRepos++; // 克隆来的仓库：zg 整棵跳过，这里只记账、不进去
+          continue;
+        }
+        stack.push(sub);
       } else if (e.name.endsWith('.md')) {
+        const st = await fsp.stat(join(cur, e.name)).catch(() => null);
+        if (!st || st.size === 0) {
+          empty++;
+          continue;
+        }
         count++;
       }
     }
   }
-  return { count, truncated: count >= COUNT_LIMIT };
+  return { count, truncated: count >= COUNT_LIMIT, empty, nestedRepos };
 }
 
 export async function inspect(dir) {
@@ -125,6 +161,9 @@ export async function inspect(dir) {
     obsidian: existsSync(join(dir, '.obsidian')),
     notes: notes.count,
     notesTruncated: notes.truncated,
+    // 「为什么笔记数比 md 文件数少」的现成答案：两类 zg 默认不收的。纯解释用，
+    // 不参与任何判定（真要精确，看索引自己的 files/filesTotal）。
+    notesSkipped: { empty: notes.empty, nestedRepos: notes.nestedRepos },
     indexed: hasIndex(dir),
     indexPath: indexDirOf(dir),
   };
