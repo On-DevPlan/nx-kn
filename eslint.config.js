@@ -62,7 +62,7 @@ export default defineConfig([
     // 试过 gitignore 式白名单（`['../*/**', '!../core/**']`），
     // eslint 9 实测负模式对 `../` 相对路径**全部失效**（同 group / 独立条目
     // / 字符串 allow 都试过）——白名单写不进去，否定式就只剩「全禁」。
-    // 退回枚举式，但配一致性测试（tests/unit/lint-enumeration.test.mjs）
+    // 退回枚举式，但配一致性测试（tests/unit/consistency.test.mjs）
     // 断言「枚举清单 == 实际业务模块目录」：新增模块忘补清单时测试直接红，
     // 把「静默失效」变成「响亮失效」。
     //

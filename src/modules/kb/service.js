@@ -19,7 +19,13 @@ import fsp from 'node:fs/promises';
 import { basename, resolve, join } from 'node:path';
 import { badInput, external, notFound } from '../../core/errors/index.js';
 import { loadStore, mutateStore } from '../../core/store.js';
-import { APP_NAME, DEFAULT_EMBEDDING, VAULT_ENV, VAULT_EXCLUDES, vaultPathFromEnv } from '../../core/paths.js';
+import {
+  APP_NAME,
+  VAULT_ENV,
+  VAULT_EXCLUDES,
+  defaultEmbeddingFromEnv,
+  vaultPathFromEnv,
+} from '../../core/paths.js';
 import {
   INDEX_DIR,
   assertZgOk,
@@ -284,6 +290,17 @@ function formatCommand(args) {
   return ['zg', ...args.map((a) => (/\s/.test(a) ? `"${a}"` : a))].join(' ');
 }
 
+// 建索引用哪个模型。优先级（从高到低）：
+//   命令行 --model  >  已建索引里实际生效的  >  这个库登记时记着的  >
+//   环境变量 NX_KN_EMBEDDING 覆盖的默认  >  内置默认
+// 最后两层是必须的：zg 的硬要求是「新索引必须显式给 --embedding，或已有全局默认」，
+// 而一台干净机器的 `~/.zvec-grep/config.json` 并不存在。没有兜底，
+// 「添加目录 → 更新索引」这条最普通的路径就会失败——用户得手动去配模型，
+// 这正是我们要避免的「额外手动操作」。
+export function resolveEmbeddingModel({ explicit, current, recorded } = {}) {
+  return explicit || current || recorded || defaultEmbeddingFromEnv();
+}
+
 // 单个库的索引。**串行**调用（不并发）：zg 在同一时刻对多个 workspace 建索引
 // 会抢模型与磁盘，实测会出现 `Cleanup of retired segment failed` 之类的残留告警；
 // 索引本来就是慢操作，串行换来的是可读的日志与确定的顺序。
@@ -292,11 +309,7 @@ async function indexOne(v, { rebuild, model, types }) {
   const before = hasIndex(dir) ? await indexStatus(dir) : null;
   const current = (before && before.embedding && before.embedding.model) || null;
   const explicit = model ? String(model) : null;
-  // 建索引总得有个模型（zg 的硬要求：新索引必须显式给 --embedding 或已有全局默认）。
-  // 优先级：命令行显式 > 已建索引里实际生效的 > 这个库登记时记着的 > 内置默认。
-  // 最末那层是必须的——本机 `~/.zvec-grep/config.json` 不存在，没有它，
-  // 「添加目录 → 更新索引」这条最普通的路径会在干净机器上直接失败。
-  const want = explicit || current || v.model || DEFAULT_EMBEDDING;
+  const want = resolveEmbeddingModel({ explicit, current, recorded: v.model });
 
   const args = ['index', dir, '--mode', 'direct', ...fileSelectionArgs(types)];
 
@@ -410,6 +423,8 @@ export async function status({ root } = {}) {
       vaults: [],
       configured: false,
       indexed: false,
+      // 还没添加库时面板照样要弹「添加目录」对话框，预填模型也得给上
+      defaultModel: defaultEmbeddingFromEnv(),
       hint: resolveError,
     };
   }
@@ -447,6 +462,9 @@ export async function status({ root } = {}) {
     configured: true,
     count: rows.length,
     vaults: rows,
+    // 面板「添加目录」对话框的预填值从这里取，而不是在自己那边写死一个字符串——
+    // 否则设了 NX_KN_EMBEDDING 的机器上，面板会把一个拉不下来的模型预填给用户。
+    defaultModel: defaultEmbeddingFromEnv(),
     // 聚合视图：面板顶部一句话能说清的就去这里取
     totals: {
       vaults: rows.length,

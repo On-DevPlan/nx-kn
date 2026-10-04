@@ -9,9 +9,10 @@ import { CliHints } from '../../web/frontend/components/CliHints.jsx';
 import { useDialog, useToast } from '../../web/frontend/components/ui.jsx';
 
 const LIMIT = 7;
-// 新建库时的默认 embedding：本机离线、免 key、中文可用（1024 维）。
-// 面板给这个默认值，是为了让「添加目录 → 更新索引」这条路在没有任何配置的机器上也能走通。
-const DEFAULT_MODEL = 'local/qwen3-embedding-0.6b';
+// 新建库时的默认 embedding 兜底值：本机离线、免 key、中文可用（1024 维）。
+// 正常应从 status 响应里的 defaultModel 取（那样设了 NX_KN_EMBEDDING 的机器能同步），
+// 这里只是 status 还没回来时的兜底，避免对话框落到空串。
+const FALLBACK_MODEL = 'local/qwen3-embedding-0.6b';
 // 建索引是慢操作（本地模型要逐个片段嵌入，大 vault 可能几分钟）。
 // 多库是串行跑的，所以给一个宽松的上限，避免请求被前端提前掐断。
 const INDEX_TIMEOUT = 900_000;
@@ -65,6 +66,9 @@ export default function KbView() {
   }
 
   async function addVault() {
+    // 默认模型以服务端为准（它知道 NX_KN_EMBEDDING）：面板写死一个值的话，
+    // 在内网/CI 这类默认被改过的机器上，预填的会是个拉不下来的模型。
+    const defaultModel = st?.defaultModel || FALLBACK_MODEL;
     const r = await dialog({
       title: '添加知识库目录',
       message: '填入 Obsidian vault 的绝对路径。可以添加多个，检索时会把结果合并成一张列表。',
@@ -73,8 +77,8 @@ export default function KbView() {
         {
           key: 'model',
           label: 'embedding 模型（可留空）',
-          placeholder: DEFAULT_MODEL,
-          value: DEFAULT_MODEL,
+          placeholder: defaultModel,
+          value: defaultModel,
         },
       ],
       okText: '添加',

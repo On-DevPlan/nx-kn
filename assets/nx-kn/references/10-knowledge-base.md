@@ -163,6 +163,7 @@ nx-kn query "登录页为什么提示超时"
 | Windows 下「路径带空格就报 `at most one root path`」 | 已修（cmd.exe 引号二次解析） | 升级到本版本；勿自行把 `windowsVerbatimArguments` 去掉 |
 | 中文召回不准 | 那个库用的是英文模型 | 换中文模型后 **必须** `--rebuild`（见下） |
 | 找不到「模型」该填什么 | 面板里显示「（未记录）」 | 索引没建时就是这么显示的；建完会显示实际生效的模型 |
+| 默认模型拉不下来（离线 / 内网） | 内置默认是 `local/qwen3-embedding-0.6b` | 用 `NX_KN_EMBEDDING=<本机已缓存的模型>` 换掉默认，或直接 `--model` |
 
 ## 七、embedding 模型（**每库一个**）
 
@@ -184,9 +185,12 @@ nx-kn index --root D:\Notes\Work --model qwen/text-embedding-v4 --rebuild
 | `qwen/qwen3.7-text-embedding` | 1024 | 远程（需 qwen API key），长文档强 |
 | `qwen/text-embedding-v4` | 1024 | 远程，经典款，8K 输入 |
 
-不指定 `--model` 时的取用顺序：**已建索引里实际生效的 → 这个库登记时记的 →
-内置默认 `local/qwen3-embedding-0.6b`**。最后一层保证了在一台从未配置过 zg 的
-机器上，「添加目录 → 更新索引」这条最普通的路径也能一次跑通。
+不指定 `--model` 时的取用顺序（高 → 低）：**命令行 `--model` → 已建索引里实际
+生效的 → 这个库登记时记的 → 环境变量 `NX_KN_EMBEDDING` → 内置默认
+`local/qwen3-embedding-0.6b`**。最后两层保证了在一台从未配置过 zg 的机器上，
+「添加目录 → 更新索引」这条最普通的路径也能一次跑通——不需要用户先去配模型。
+`NX_KN_EMBEDDING` 是给 CI / 内网留的「换默认模型」开关（不改代码即可），
+但它压不过前面几层：换模型始终是显式动作，不该被环境变量偷袭。
 
 > 远程模型需要的凭据写在 zg 的全局配置里（nx-kn 不接触 key）：
 > ```bash

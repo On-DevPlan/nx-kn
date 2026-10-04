@@ -29,6 +29,8 @@
     "test": "pnpm run lint && pnpm run build && pnpm run test:smoke && pnpm run test:unit",
     "test:smoke": "node tests/smoke.mjs",
     "test:unit": "node --test tests/unit/*.test.mjs",
+    "test:pipeline": "node tests/pipeline.mjs",
+    "test:all": "pnpm run test && pnpm run test:pipeline",
     "logo": "node tools/logo-gen/cli.mjs"
   },
   "packageManager": "pnpm@10.33.0",

@@ -43,6 +43,19 @@ export const VAULT_EXCLUDES = ['.obsidian', '.trash'];
 // 中文可用，1024 维。要换远程模型仍然可以 `--model` + `--rebuild`。
 export const DEFAULT_EMBEDDING = 'local/qwen3-embedding-0.6b';
 
+// 默认模型的逃生舱：环境变量可覆盖内置默认，**不改代码**。
+// 存在的理由有二：(1) CI / 干净机器用个小模型（model2vec 几十 MB）就能把
+// 「加目录 → 建索引 → 检索」跑通，不必每次拉 600 MB 的 qwen；
+// (2) 内网机器可以把它指向已经缓存好的那个模型。
+// 只在「既没显式给 --model、索引里也没有已存 schema、这个库也没登记过模型」时才生效，
+// 所以它永远不会顶掉用户明确的选择。
+export const EMBEDDING_ENV = 'NX_KN_EMBEDDING';
+
+export function defaultEmbeddingFromEnv() {
+  const v = process.env[EMBEDDING_ENV];
+  return v && String(v).trim() ? String(v).trim() : DEFAULT_EMBEDDING;
+}
+
 
 // 测试必须能指向临时目录，否则会写脏用户的真实数据。
 export const STORE_ENV = 'NX_KN_STORE';

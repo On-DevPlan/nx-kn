@@ -68,7 +68,7 @@ docs/
 | 3 | `src/web/frontend/registry.js` 的 `VIEWS` | 面板少一个 tab（一致性测试会红） |
 | 4 | `src/index.js` 的 `export * as <域>` | 库用方拿不到 service ❗**无断言** |
 | 5 | `eslint.config.js` 的 files + group 禁列 | 模块互依规则对它失效 ❗**无断言** |
-| 6 | `tests/unit/*`（纯逻辑）与 `tests/smoke.mjs`（只读路径） | 端到端坏了没人知道 |
+| 6 | `tests/unit/*`（纯逻辑）、`tests/smoke.mjs`（只读路径）、`tests/pipeline.mjs`（真起 zg 的全链路） | 端到端坏了没人知道 |
 | 7 | `assets/nx-kn/`（SKILL.md + references） | agent 永远不知道这条命令存在 ❗**单向断言** |
 | 8 | `README.md` / `CHANGELOG.md` | 文档与实际脱节 |
 
@@ -78,12 +78,22 @@ docs/
 ## 开发
 
 ```bash
-pnpm dev          # vite + serve 双进程，一个 ctrl-c 一起退
-pnpm test         # lint + build + smoke + unit
-pnpm logo         # 手动重出 logo（svg + png + ico 全套）
+pnpm dev            # vite + serve 双进程，一个 ctrl-c 一起退
+pnpm test           # 快检：lint + build + smoke + unit（秒级，不需要 zg）
+pnpm test:pipeline  # 全链路：skill 安装 → 建库 → 建索引 → 检索 → 增量 → 多库（需 zg，真建索引）
+pnpm test:all       # 上面两个连着跑
+pnpm logo           # 手动重出 logo（svg + png + ico 全套）
 ```
+
+`test:pipeline` 是「skill 装完之后这一整串事能不能自动做完」的可执行证明。
+它隔离出一份临时 store / skills 目录 / vault，然后逐步断言：skill 落盘且幂等、
+空现场把用户引到 `kb add`、加库、**不给 `--model` 也能建索引**（默认兜底）、
+检索命中后按提示拼出的绝对路径真能读到原文、增量只嵌新文件（旧向量保留）、
+多库合并命中带来源库名、`kb remove` 只解登记不删索引。
+每一步是一个独立子测试，失败能直接看出卡在哪一环。CI 与发版流水线都会跑它，
+用 `NX_KN_PIPELINE_MODEL=local/potion-code-16m-v2` 指一个小模型省下载。
 
 ## 发版
 
 tag 幂等 + npm provenance 见 `.github/workflows/npm-publish.yml`：推 tag 到 main，
-CI 自动构建、测试、`npm publish --provenance`（需要 `NPM_TOKEN` secret）。
+CI 自动构建、测试、跑全链路流水线、`npm publish --provenance`（需要 `NPM_TOKEN` secret）。

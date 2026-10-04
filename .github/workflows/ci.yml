@@ -37,3 +37,16 @@ jobs:
 
       - name: 端到端冒烟
         run: pnpm run test:smoke
+
+      # 全链路流水线：从「skill 安装」一路走到「检索命中并读到原文」。
+      # 冒烟测试刻意不起 zg，所以「加目录 → 建索引 → 检索」这条主干一直是
+      # 只在开发者本机验证过的；这一步把它搬进 CI，让每一步都有护栏。
+      - name: 安装召回引擎 zg
+        run: npm install -g @zvec/zvec-grep@0.2.2
+
+      - name: 全链路流水线（skill 安装 → 建库 → 建索引 → 检索 → 增量 → 多库）
+        run: pnpm run test:pipeline
+        env:
+          # 用最小的 model2vec 模型，避免每次 CI 拉 600 MB 的默认模型；
+          # 它只影响「用哪个模型」，不影响这条链路的每一步是否成立。
+          NX_KN_PIPELINE_MODEL: local/potion-code-16m-v2

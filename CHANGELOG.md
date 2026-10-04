@@ -20,12 +20,35 @@
 - 单个库目录丢失或召回失败**不再拖垮整次操作**：`status` 标「目录不存在」，
   `query` 把它记入 `skipped[]`，其余库照常返回
 
+### Added — 全链路流水线测试（skill 装完即可用）
+
+- **`tests/pipeline.mjs`（`pnpm run test:pipeline`）**：把「一个 agent 装完 skill
+  之后要做的一整串事」真跑一遍——skill 安装（含重复安装幂等）→ `skill get` 导出 →
+  空现场 `status` 引导到 `kb add` → `kb add` → **不给 `--model` 的 `index`**（验证
+  默认模型兜底）→ `status` 复检覆盖度与生效模型 → `query` 命中并**按提示拼出的绝对
+  路径真能读到原文** → 增量索引（`added 1 / unchanged 2`，旧向量原样保留）→
+  新笔记可召回 → 多库合并命中带来源库名 → `kb remove` 只解登记、不删索引。
+  每一步是独立子测试，失败能一眼看出卡在哪一环；隔离临时 store / skills 目录 / vault，
+  不碰用户真实数据
+- **CI 与发版流水线都跑它**：`.github/workflows/ci.yml` 增加「装 zg 0.2.2 →
+  `pnpm run test:pipeline`」两步（用 `NX_KN_PIPELINE_MODEL` 指一个小模型省下载）。
+  此前冒烟测试刻意不起 zg，「加目录 → 建索引 → 检索」这条主干**只在开发者本机验证过**，
+  流水线里没有护栏；`npm-publish.yml` 同样加了这一步——装好却用不起来的 skill 不该发出去
+- 新增单测：`tests/unit/kb-embedding.test.mjs`（模型取用优先级）、以及
+  「skill 文档里出现的每条 `nx-kn` 命令都能解析到真实命令」（用**真正的命令匹配器**
+  逐条解析，而非字符串包含——包含判断会漏掉「写了 `nx-kn index`、命令其实叫
+  `indexing`」这类漂移）
+
 ### Changed
 
-- **默认 embedding 模型**：`paths.js` 新增 `DEFAULT_EMBEDDING = 'local/qwen3-embedding-0.6b'`。
-  取用顺序为「命令行显式 → 已建索引实际生效的 → 该库登记的 → 内置默认」。
-  本机 `~/.zvec-grep/config.json` 不存在（既无 key 也无全局默认），没有这一层，
-  「添加目录 → 更新索引」在干净机器上必然失败
+- **默认 embedding 模型支持环境变量覆盖**：新增 `NX_KN_EMBEDDING`，取用顺序变为
+  「命令行 `--model` → 已建索引实际生效的 → 该库登记的 → `NX_KN_EMBEDDING` → 内置默认」。
+  它压不过前三层（换模型始终是显式动作，不该被环境变量偷袭），用途是 CI / 内网
+  不改代码即可换默认模型。面板「添加目录」的预填模型改从 `status.defaultModel` 取，
+  与 CLI 保持一致（否则设了变量的机器上，面板会预填一个拉不下来的模型）
+- **默认 embedding 模型**：`paths.js` 新增 `DEFAULT_EMBEDDING = 'local/qwen3-embedding-0.6b'`，
+  作为取用链最后一层兜底（完整顺序见上一条）。本机 `~/.zvec-grep/config.json` 不存在
+  （既无 key 也无全局默认），没有这一层，「添加目录 → 更新索引」在干净机器上必然失败
 - **迁移时丢弃旧的全局 `kb.model`**：它是单值字段，`kb use` 切库时被原样保留，
   实测出现过「store 记着 `local/potion-code-16m-v2`、磁盘上没有任何该模型的索引、
   实际索引用的是 `qwen3-embedding-0.6b`」的状态。把它写进每库记录等于把一个

@@ -39,7 +39,8 @@ CLI 与 Web 面板共享同一份 action 声明。
 | `nx-kn help [topic]` | 帮助；`help --json` 输出可解析命令表 |
 | `nx-kn health` | 自检 |
 | `nx-kn settings get` / `set k=v...` | 读写设置（白名单外的键被拒绝） |
-| `nx-kn skill install [--force]` | 把用法装给本机 agent（~/.claude/skills） |
+| `nx-kn skill install [--to 目录] [--force]` | 把用法装给本机 agent（默认 `~/.claude/skills`；`--to` 可换落点） |
+| `nx-kn skill get [ref]` | 导出 skill 上下文（正文 + 安装状态；不读本机 skill 目录的外部 agent 用它） |
 | 任何命令 + `--json` | 机器可读输出（agent 模式） |
 | 任何命令 + `--store <path>` | 本次运行覆盖存储路径（测试防污染必用） |
 
@@ -62,12 +63,28 @@ CLI 与 Web 面板共享同一份 action 声明。
 
 ## agent 典型会话
 
-1. `nx-kn status --json` —— 确认 zg 可用、有哪些库、索引建了没
-2. `nx-kn query "问题" --json` —— 取 `hits[]`（每条都带 `vault`，据此定位文件）
-3. 需要原文时直接读 `<vault>/<path>` 的对应行区间
-4. 新增笔记后 `nx-kn index`（增量，别加 `--rebuild`）；只有换模型才要 `--rebuild`
-5. 出错时读 `error` 字段：带「用法:」前缀 = 参数问题；
-   `EXTERNAL` = zg 调用失败（多半是没装：`npm install -g @zvec/zvec-grep`）
+**冷启动（还没有任何库、也没索引）——除装引擎外，全程不需要用户手动操作：**
+
+1. `nx-kn status --json` —— 先看现场：`zg.installed` / `configured` / 每个库的 `indexed`
+   - `zg.installed=false` → 这是**唯一**需要用户出手的一步：`npm install -g @zvec/zvec-grep`（Node ≥ 22）
+   - `configured=false` → 手里还没有库，照第 2 步加一个
+2. `nx-kn kb add "<vault绝对路径>" --json` —— 登记目录。可多次添加，检索时一起搜
+3. `nx-kn index --json` —— 建索引。**不用给 `--model`**：会自动落到内置默认
+   （本地离线模型），干净机器上也能一次跑通。要换模型才加 `--model M`，
+   已建索引换模型必须叠加 `--rebuild`
+4. `nx-kn query "问题" --json` —— 取 `hits[]`。每条都带 `vault`（哪个库）、
+   `path`（库内相对路径）、`start`/`end`（行号）、`score`
+5. 读原文：把 `<hits[i].vault>/<hits[i].path>` 拼起来，取第 `start`–`end` 行
+
+**日常（索引已建）：**
+
+- 新写了笔记 → `nx-kn index`（增量，**别加 `--rebuild`**，旧向量会原样保留）
+- 出错时读 `error` 字段：带「用法:」前缀 = 参数问题；
+  `EXTERNAL` = zg 调用失败（多半是没装）
+
+**默认模型可被环境变量顶替**：`NX_KN_EMBEDDING=local/potion-code-16m-v2` 会改写
+「没显式指定时用哪个模型」——CI、内网、或者只想快跑一遍时用得上。
+它压不过 `--model`，也压不过已建索引里锁定的模型（换模型是显式动作，不该被偷袭）。
 
 ## 什么时候不用
 

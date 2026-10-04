@@ -69,9 +69,28 @@ test('view.jsx 只 import 前端壳与 react（不拖 node 侧代码进浏览器
 });
 
 // ---- 3. skill 文档提到的命令必须真实存在 ----
-// assets/<app>/SKILL.md 的命令速查表如果与实际 CLI 帮助脱节，agent 会
-// 照着文档敲出「未知命令」。文档是骨架的一部分，最基本的核心命令必须在场；
-// 与模板 id 同名的 SKILL.md 目录若被改名，这里会先红。
+// 文档是骨架的一部分：agent 只读 skill 文档，不会去猜命令名。文档里写了一条
+// 跑不了的命令，等价于「skill 装完之后这件事做不成」——而这正是流水线要保证的。
+// 这里用**真正的命令匹配器**（cli.js 的 resolveCommand）逐条解析，而不是做字符串
+// 包含判断：包含判断会漏掉「写了 nx-kn index、但命令其实叫 indexing」这类漂移，
+// 而那恰恰是最容易发生的一种。
+
+// 只认「nx-kn + 1~2 个小写词」的形态：命令行永远是小写字母开头，
+// 而正文里的 `[nx-kn 知识库召回]` 这类中文短语不该被当成命令。
+// 空白必须限定为空格/制表符（不能用 \s）——frontmatter 是 `name: nx-kn` 换行接
+// `description: ...`，用 \s 会把下一行的键名当成命令。
+const CMD_RE = /nx-kn[ \t]+([a-z][a-z0-9-]*(?:[ \t]+[a-z][a-z0-9-]*)?)/g;
+
+function docFiles() {
+  const files = [join(ROOT, 'assets', 'nx-kn', 'SKILL.md')];
+  const refDir = join(ROOT, 'assets', 'nx-kn', 'references');
+  if (existsSync(refDir)) {
+    for (const f of readdirSync(refDir)) {
+      if (f.endsWith('.md')) files.push(join(refDir, f));
+    }
+  }
+  return files;
+}
 
 test('SKILL.md 存在且速查表覆盖核心命令', () => {
   const skillPath = join(ROOT, 'assets', 'nx-kn', 'SKILL.md');
@@ -83,4 +102,28 @@ test('SKILL.md 存在且速查表覆盖核心命令', () => {
       `SKILL.md 速查表缺核心命令 ${cmd}（文档与实现漂移）`
     );
   }
+});
+
+test('skill 文档里出现的每条 nx-kn 命令都能解析到真实命令', async () => {
+  const { resolveCommand } = await import('../../src/runtime/cli.js');
+
+  const bad = [];
+  let total = 0;
+  for (const file of docFiles()) {
+    const doc = readFileSync(file, 'utf8');
+    const rel = file.slice(ROOT.length + 1).replace(/\\/g, '/');
+    for (const m of doc.matchAll(CMD_RE)) {
+      total++;
+      const tokens = m[1].trim().split(/\s+/);
+      if (!resolveCommand(tokens)) bad.push(`${rel}: nx-kn ${m[1].trim()}`);
+    }
+  }
+
+  assert.ok(total >= 10, `文档里应至少提到 10 条命令（实际 ${total}）——正则或文档被改坏了`);
+  assert.deepEqual(
+    bad,
+    [],
+    `以下出现在 skill 文档里的命令在 CLI 里不存在（agent 照着敲会「未知命令」）：\n  ` +
+      bad.join('\n  ')
+  );
 });
