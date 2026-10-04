@@ -26,6 +26,12 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      # 先把召回引擎装上，让下面每一步都在「与真实机器一致」的条件下跑：
+      # 冒烟里有断言走的是「zg 在场」那条分支（例如未建索引时提示 `nx-kn index`），
+      # 缺 zg 时会走到「先装 zg」的提示；smoke 里那条 Windows 引号回归也会被跳过。
+      - name: 安装召回引擎 zg
+        run: npm install -g @zvec/zvec-grep@0.2.2
+
       - name: Lint（含分层约束）
         run: pnpm run lint
 
@@ -41,9 +47,6 @@ jobs:
       # 全链路流水线：从「skill 安装」一路走到「检索命中并读到原文」。
       # 冒烟测试刻意不起 zg，所以「加目录 → 建索引 → 检索」这条主干一直是
       # 只在开发者本机验证过的；这一步把它搬进 CI，让每一步都有护栏。
-      - name: 安装召回引擎 zg
-        run: npm install -g @zvec/zvec-grep@0.2.2
-
       - name: 全链路流水线（skill 安装 → 建库 → 建索引 → 检索 → 增量 → 多库）
         run: pnpm run test:pipeline
         env:

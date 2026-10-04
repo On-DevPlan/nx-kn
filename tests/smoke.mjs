@@ -96,7 +96,9 @@ test('kb status：vault 存在但未建索引 → 该库 indexed=false 且给出
   assert.equal(v.indexed, false);
   assert.equal(v.obsidian, false);
   assert.equal(v.model, null, '没有索引时模型必须是「未记录」，不能回落 store 里的残留值');
-  assert.match(v.hint, /nx-kn index/);
+  // hint 指向「下一步该做什么」。没有 zg 的机器上，更紧要的下一步是先装 zg——
+  // 那是环境差异不是产品问题，所以两种提示都接受；但必须是**可照做**的提示。
+  assert.match(v.hint, /nx-kn index|npm install -g @zvec\/zvec-grep/);
   assert.equal(r.totals.vaults, 1);
   assert.equal(r.totals.indexed, 0);
 });

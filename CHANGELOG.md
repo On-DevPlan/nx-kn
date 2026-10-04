@@ -30,10 +30,11 @@
   新笔记可召回 → 多库合并命中带来源库名 → `kb remove` 只解登记、不删索引。
   每一步是独立子测试，失败能一眼看出卡在哪一环；隔离临时 store / skills 目录 / vault，
   不碰用户真实数据
-- **CI 与发版流水线都跑它**：`.github/workflows/ci.yml` 增加「装 zg 0.2.2 →
-  `pnpm run test:pipeline`」两步（用 `NX_KN_PIPELINE_MODEL` 指一个小模型省下载）。
-  此前冒烟测试刻意不起 zg，「加目录 → 建索引 → 检索」这条主干**只在开发者本机验证过**，
-  流水线里没有护栏；`npm-publish.yml` 同样加了这一步——装好却用不起来的 skill 不该发出去
+- **CI 与发版流水线都跑它**：`.github/workflows/ci.yml` 把「装 zg 0.2.2」提到所有
+  步骤之前（让冒烟也走真实分支），末尾加 `pnpm run test:pipeline`（用
+  `NX_KN_PIPELINE_MODEL` 指一个小模型省下载）。此前冒烟测试刻意不起 zg，
+  「加目录 → 建索引 → 检索」这条主干**只在开发者本机验证过**，流水线里没有护栏；
+  `npm-publish.yml` 同样如此——装好却用不起来的 skill 不该发出去
 - 新增单测：`tests/unit/kb-embedding.test.mjs`（模型取用优先级）、以及
   「skill 文档里出现的每条 `nx-kn` 命令都能解析到真实命令」（用**真正的命令匹配器**
   逐条解析，而非字符串包含——包含判断会漏掉「写了 `nx-kn index`、命令其实叫
@@ -63,6 +64,14 @@
 
 ### Fixed
 
+- **`normalizeVault` 的显示名依赖平台的 `basename`**：`name` 只用于显示，却用
+  `node:path` 的 `basename` 推导——POSIX 上 `basename('D:\Notes\Vault')` 返回的是整串
+  路径（反斜杠不是分隔符），于是「在 Windows 上写过、在 Linux 上读」的 store.json
+  会把 name 变成一条完整路径。CI 因此**连红三次**（kb-store 4 条断言），而且挂在最前面，
+  把后面的全链路流水线步骤一起挡住了。改为与平台无关的分段取末（两种分隔符都认）
+- **冒烟里「未建索引 → 下一步 `nx-kn index`」的断言过严**：没有 zg 的机器上提示会
+  正确地变成「先装 zg」，断言却只认前者 → 干净机器上跑 `pnpm test` 会红。改为两者都接受
+  （只要是可照做的提示即可）；CI 则把「装 zg」提到所有步骤之前，让冒烟走真实分支
 - **参数含空格时整条 zg 调用被 cmd.exe 切碎**：Windows 上 zg 是 `.cmd` 垫片，必须经
   `cmd.exe /d /s /c` 调用；而 cmd 会**把命令行再解析一遍**，Node 默认又给整行套引号、
   把内层 `"` 转义成 `\"`（cmd 不认）。两者叠加使 `"D:\My Vault"` 裂成两个参数，

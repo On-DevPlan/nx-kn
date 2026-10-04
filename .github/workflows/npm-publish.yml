@@ -25,13 +25,16 @@ jobs:
           cache: 'pnpm'
 
       - run: pnpm install --frozen-lockfile
+
+      # 先装召回引擎：冒烟与全链路流水线都要它，装上才是「与真实机器一致」的条件
+      - name: 安装召回引擎 zg
+        run: npm install -g @zvec/zvec-grep@0.2.2
+
       - run: pnpm run build
       - run: pnpm test
 
       # 发布前把「skill 安装 → 建库 → 建索引 → 检索」也真跑一遍：
       # 一个装好后用不起来的 skill，不该被发出去。
-      - name: 安装召回引擎 zg
-        run: npm install -g @zvec/zvec-grep@0.2.2
       - name: 全链路流水线
         run: pnpm run test:pipeline
         env:
