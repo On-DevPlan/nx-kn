@@ -4,6 +4,39 @@
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-10-04
+
+### Fixed — 守护在 Linux 上会被索引自身打崩
+
+- **Linux 上 `nx-kn watch` / `nx-kn serve` 的守护进程会因 `ENOENT` 直接退出**，
+  于是「改了笔记自动刷新索引」这个能力在 Linux 上实际不可用。根因是 `core/watch.js`
+  原先用 `fs.watch(dir, { recursive: true })` + **事件级**过滤。但 Linux 的 recursive 是
+  **用户态实现**（`node:internal/fs/recursive_watch` 自己 `readdir` 整棵树），事件过滤只能丢掉
+  事件、**拦不住 Node 走进** `.zvec-grep/`；而那里正是索引时不断重建 RocksDB 分片段目录的地方，
+  父目录与子目录两次 `readdir` 之间目录被换掉就抛 `ENOENT`：
+  `ENOENT: no such file or directory, scandir '…/index.zvec/3/scalar.index.1.rocksdb'`。
+  更关键的是该错误以 FSWatcher 的**异步 `error` 事件**抛出，原先无人监听 →
+  `Unhandled 'error' event` → **整个守护进程当场退出**。而「索引 churn」恰恰是守护自己触发
+  索引造成的，属自毁回环。macOS 的 recursive 走原生 FSEvents、不经过这条 scandir 路径，
+  所以此前在 macOS 上试不出来（CI 上的表现是时绿时红：同一个 SHA 可能过、下一个纯文档提交反而红）。
+- 修法（两处，都在 `core/watch.js`）：
+  - **改逐目录监听**——自己从根枚举目录、跳过排除目录（`shouldSkipDirName`），
+    给每个目录挂**非递归** watcher。于是 `.zvec-grep/` **连 `readdir` 都不会发生**，
+    回环与那条 `ENOENT` 路径同时消失，顺带让 Linux / macOS / Windows 行为一致；
+    目录增删由 `rename` 事件触发节流重扫来动态挂/摘。
+  - **每个 watcher 都挂 `error`**——异步错误只报告不抛，摘掉出错的 watcher 并在重扫时
+    重新挂上（自愈）；同一目录持续出错不刷屏。
+- `modules/kb/watch.js`：watcher 级故障现在记进守护状态并报一条事件（文案标明「已自动重挂」），
+  与既有的「索引失败不掀掉守护」是同一条原则；收到变化即清掉该标记（免得自愈后仍挂着旧错误）。
+- 新增 6 条单测：断言**排除目录绝不被监听**（用「误闯即报 ENOENT」的假文件系统做闸门）、
+  **watcher 异步 error 不掀翻进程且能自愈重挂**、目录增删会挂上/摘掉、同目录出错不刷屏、
+  `close` 不留句柄。
+- 文档同步更正：`assets/nx-kn/SKILL.md`（第 6 条不变量 + 守护小节）、
+  `assets/nx-kn/references/10-knowledge-base.md` §五——原先写的是「过滤放在事件入口」，
+  这条在 Linux 上不充分，已改为「排除目录根本不挂 watcher」。
+
+`0.2.0` 是带着这个问题发出去的（在 Linux 上守护不可用），因此补 `0.2.1`。
+
 ## [0.2.0] - 2026-10-04
 
 本次把计划里阶段 4 的「守护」与阶段 5 的「外部资料采集」一起交付——

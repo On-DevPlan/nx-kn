@@ -12,7 +12,9 @@
 // 新能力只补它独有的那一环，不复制已有的一环。
 //
 // 三个必须自己处理的点（都不是「顺手优化」而是正确性）：
-//   1. **事件过滤**放在入口（core/watch.js），否则 `.zvec-grep/` 的写入会自激成回环
+//   1. **排除目录根本不挂 watcher**（见 core/watch.js：逐个目录挂非递归 watcher，
+//      跳过 `.zvec-grep/` 等）。若只做事件过滤，Linux 上 Node 的递归实现仍会走进
+//      `.zvec-grep/`，撞上索引重建的 RocksDB 目录 → ENOENT → 守护进程崩（实测踩过）
 //   2. **串行 + 不重入**：zg 同时跑两个 workspace 会抢模型与磁盘（service.index 的注释里
 //      记了这个坑），且同一库并排跑两次索引毫无意义
 //   3. **合并而非排队**：索引期间来的变化只置一个 dirty 位，跑完再补一轮，
@@ -104,7 +106,13 @@ export async function startWatch({ debounceMs, source = 'serve', onEvent } = {})
       error: null,
       close: null,
     };
-    const h = watchTree(v.path, { delayMs, onBatch: (files) => onChange(t, files) });
+    const h = watchTree(v.path, {
+      delayMs,
+      onBatch: (files) => onChange(t, files),
+      // watcher 级故障（目录被删/无权限/句柄耗尽）只记进状态并继续 ——
+      // 与「索引失败不掀掉守护」同一条原则。watchTree 会自己把它重挂上。
+      onError: ({ error }) => onWatchError(t, error),
+    });
     t.close = h.close;
     t.error = h.error ? String(h.error.message || h.error) : null;
     session.targets.set(v.path, t);
@@ -126,10 +134,31 @@ export function stopWatch() {
   return { ...snap, running: false };
 }
 
+// watcher 级故障：记状态 + 报一条事件，**不**停止守护。
+// 文案刻意写「已自动重挂」——watchTree 会摘掉出错的 watcher 并在重扫时重新挂上，
+// 所以这通常是一次性的抖动（目录被替换、编辑器原子保存换了 inode）。
+function onWatchError(t, err) {
+  const s = session;
+  if (!s || s.stopped) return;
+  t.error = String((err && err.message) || err);
+  s.errors++;
+  pushEvent({
+    type: 'error',
+    at: nowIso(),
+    vault: t.path,
+    vaultName: t.name,
+    error: `监听出错（已自动重挂，若持续出现请检查该目录权限）：${t.error}`,
+  });
+}
+
 // 一批可关心的变化到了。
 function onChange(t, files) {
   const s = session;
   if (!s || s.stopped) return;
+
+  // 能收到变化就说明 watcher 是活的 —— 把之前那次 watcher 级故障的标记清掉，
+  // 免得面板一直挂着一条已经自愈的错误。
+  t.error = null;
 
   const known = files.filter((f) => f !== WATCH_ANY);
   pushEvent({
