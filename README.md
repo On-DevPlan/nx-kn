@@ -53,6 +53,18 @@ nx-kn query "怎么配置主题"                                       # 与本�
 nx-kn crawl remove vitepress --purge                            # 不要了：连文件一起删
 ```
 
+把本地目录（如 Obsidian vault）整理入库——与文档站同一条流水线：
+
+```bash
+nx-kn crawl add "D:\Obsidian Vault" --name myvault   # 磁盘上存在的目录即本地源（kind=local）
+nx-kn crawl run --name myvault                        # skill-seekers 整理成结构化 markdown，原始目录只读
+nx-kn index                                            # 产物已自动登记为知识库，建索引
+nx-kn query "笔记里写了什么"                            # 检索整理产物
+```
+
+本地目录源只支持 skill-seekers 引擎（`--engine node` 会被拒绝）；要不要保留原库的
+`kb add` 登记自便——只想用整理产物检索时 `kb remove <原路径>` 解除原库即可。
+
 `query` 的输出带一段归属头（每个库的根 + 库名）；多库时命中带 `[库名]` 前缀，
 agent 拿到后可以拼出绝对路径去读全文。`--json` 给结构化 `hits[]`
 （`path / start / end / heading / snippet / matchedBy / score / vault / vaultName`）。

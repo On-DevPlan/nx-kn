@@ -58,11 +58,17 @@ export default function CrawlView() {
     const r = await dialog({
       title: '添加采集源',
       message:
-        '填入一个文档站地址。抓下来的页面会清洗成 markdown，并自动登记为知识库。\n' +
-        '默认用 Skill Seekers（外部引擎，需要本机有 Python 3.10+ 与 uv）；\n' +
-        '只想零依赖跑、或站点是纯静态 HTML 时，选内置 Node。',
+        '填入一个文档站地址，或一个本地目录路径（如 Obsidian vault）。\n' +
+        '文档站：抓取页面清洗成 markdown；本地目录：用 Skill Seekers 整理成结构化 markdown。\n' +
+        '两者都会自动登记为知识库。默认引擎 Skill Seekers（需 Python 3.10+/uv）；\n' +
+        '站点是纯静态 HTML 且想零依赖时，可对文档站选内置 Node（本地目录只支持 Skill Seekers）。',
       fields: [
-        { key: 'url', label: '起始地址（http/https）', placeholder: 'https://vitepress.dev/guide/', value: '' },
+        {
+          key: 'url',
+          label: '地址（http/https）或本地目录路径',
+          placeholder: 'https://vitepress.dev/guide/ 或 D:\\Obsidian Vault',
+          value: '',
+        },
         { key: 'name', label: '源名（留空自动推导）', placeholder: 'vitepress-dev', value: '' },
         { key: 'engine', label: '抓取引擎', options: ENGINE_OPTIONS, value: 'skill-seekers' },
         { key: 'level', label: '增强级别 0-3（0 = 纯抓取，不调 LLM）', placeholder: '0', value: '0' },
@@ -176,7 +182,7 @@ export default function CrawlView() {
 
         {!loading && !st.count && (
           <div className="empty">
-            还没有采集源 —— 点「添加采集源」填入一个文档站地址
+            还没有采集源 —— 点「添加采集源」填入文档站地址或本地目录路径（如 Obsidian vault）
           </div>
         )}
 
@@ -186,6 +192,7 @@ export default function CrawlView() {
               [{s.name}] {s.url}
             </div>
             <div className="acts">
+              {s.kind === 'local' ? <span className="tag strong">本地目录</span> : null}
               <span className="tag">{engineLabel(s.engine)}</span>
               {s.registered ? <span className="tag strong">已入知识库</span> : <span className="tag">未入知识库</span>}
               {s.failed > 0 ? <span className="tag bad">失败 {s.failed}</span> : null}

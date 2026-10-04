@@ -192,6 +192,10 @@ function normalizeSource(s) {
   return {
     name,
     url,
+    // 源类型：web = 文档站（url 是 http(s) 起点），local = 本地目录（url 是绝对路径，
+    // 典型是 Obsidian vault——crawl 负责把它「整理」成干净 markdown 再入库）。
+    // 老记录没有这个键 → web，与既有语义完全一致。
+    kind: s.kind === 'local' ? 'local' : 'web',
     engine,
     // 只认 0~3 的整数；其余（含 undefined / NaN / 越界）回落到 0 = 纯抓取，不调 LLM。
     enhanceLevel: Number.isInteger(level) && level >= 0 && level <= 3 ? level : 0,

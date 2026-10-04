@@ -1,6 +1,6 @@
 ---
 name: nx-kn
-description: 当需要检索本机 Obsidian 知识库（笔记全文 / 语义搜索）、建立或更新索引、增减知识库目录、查看索引状态，或把 vault 之外的**文档站**抓下来入知识库时使用。触发词：知识库、笔记、检索、搜索、召回、Obsidian、vault、索引、query、index、多个库、添加目录、抓取文档站、爬虫、资料采集、crawl、离线文档、抓取引擎、skill-seekers。不适用：需要 LLM 问答或摘要（本工具只召回、不生成）。注意：采集默认使用外部引擎 Skill Seekers（需本机 Python 3.10+ 与 uv），离线或纯静态场景可加 `--engine node` 改用内置引擎。
+description: 当需要检索本机 Obsidian 知识库（笔记全文 / 语义搜索）、建立或更新索引、增减知识库目录、查看索引状态，把 vault 之外的**文档站**抓下来入知识库，或把**本地目录**（如 Obsidian vault）整理入库时使用。触发词：知识库、笔记、检索、搜索、召回、Obsidian、vault、索引、query、index、多个库、添加目录、抓取文档站、爬虫、资料采集、crawl、离线文档、抓取引擎、skill-seekers、本地目录、整理、整理入库。不适用：需要 LLM 问答或摘要（本工具只召回、不生成）。注意：采集与整理默认使用外部引擎 Skill Seekers（需本机 Python 3.10+ 与 uv），离线或纯静态场景可加 `--engine node` 改用内置引擎（仅文档站源；本地目录源只支持 skill-seekers）。
 ---
 
 # nx-kn
@@ -31,6 +31,10 @@ CLI 与 Web 面板共享同一份 action 声明。需要时还能把**文档站�
    **两条引擎在做同一件事**（`--engine` 选）：默认 `skill-seekers`（外部进程，抓取与分类
    全交给它，需本机 Python 3.10+ 与 uv），可切 `node`（内置纯 Node，零额外依赖，只收静态
    HTML）。引擎差异**只到落盘为止**——两者产出的都是同一形状的 markdown 目录，后续共用。
+   **本地目录也是合法采集源**（`crawl add <存在的目录路径>`，典型是 Obsidian vault）：
+   语义是「整理」而非「抓取」，引擎只有 skill-seekers 一条路（`--engine node` 在
+   add 与 run 两处都会被拒绝），产物同样落 `sources/<名>/` 并自动登记为知识库——
+   原始目录只读不写。
 6. **守护不自己实现增量，只挑时机**——`watch` 复用 `index` 那条路（zg 的 `index` 本就是
    增量），它唯一的本职是「在笔记变了的时候把索引叫起来」。守护**逐个目录**挂 watcher，
    排除目录（`.obsidian/` 本机 325 篇 md、`.zvec-grep/` 自己写盘）**根本不进监听范围**
@@ -48,7 +52,7 @@ CLI 与 Web 面板共享同一份 action 声明。需要时还能把**文档站�
 | `nx-kn index [--rebuild] [--model M] [--types md,txt] [--root 路径]` | 对**全部库**建 / 增索引（默认只收 md）；不带 `--rebuild` 即**增量**；**换模型必须叠加 `--rebuild`** |
 | `nx-kn query "<问句>" [--limit N] [--preview none\|short\|full] [--root 路径]` | 跨全部库混合检索，按融合分合并；输出 `[库名] 相对路径:行号` + 片段 |
 | `nx-kn status` | zg 可用性 / 各库笔记数 / 索引覆盖度 / 生效模型 |
-| `nx-kn crawl add <url> [--name N] [--engine E] [--enhance-level 0-3] [--agent A] [--match glob] [--max N]` | 登记一个**文档站**采集源（只登记不抓）。`E` = `skill-seekers`（默认，外部引擎）或 `node`（内置） |
+| `nx-kn crawl add <url或本地目录> [--name N] [--engine E] [--enhance-level 0-3] [--agent A] [--match glob] [--max N]` | 登记一个**文档站或本地目录**采集源（只登记不抓不整理）。`E` = `skill-seekers`（默认，外部引擎）或 `node`（内置，仅文档站源）；本地目录源只支持 `skill-seekers` |
 | `nx-kn crawl run [--name N] [--engine E] [--rebuild]` | 抓取并清洗成 markdown；默认增量（内容未变的页面不重写）。`--engine` 可临时覆盖源上存的引擎 |
 | `nx-kn crawl list` | 采集源列表 + 上次抓取时间 / 页数 / 失败数 |
 | `nx-kn crawl remove <name> [--purge]` | 解登记（默认保留抓下来的文件与知识库登记；`--purge` 连目录一起删） |
@@ -106,7 +110,7 @@ CLI 与 Web 面板共享同一份 action 声明。需要时还能把**文档站�
 「没显式指定时用哪个模型」——CI、内网、或者只想快跑一遍时用得上。
 它压不过 `--model`，也压不过已建索引里锁定的模型（换模型是显式动作，不该被偷袭）。
 
-## 资料采集（把文档站变成知识库）
+## 资料采集（把文档站或本地目录变成知识库）
 
 需要「离线查某个文档站 / 网页资料」时，先抓再检索。**全程不需要用户手动操作**：
 
@@ -118,6 +122,13 @@ CLI 与 Web 面板共享同一份 action 声明。需要时还能把**文档站�
 3. `nx-kn index --json` —— 抓下来的目录已**自动登记为知识库**，直接建索引即可
    （也可 `--root <results[].dir>` 只给这一个建）
 4. `nx-kn query "问题" --json` —— 与本地 vault 一起被检索，命中带来源库名
+
+需要「把本地目录（如 Obsidian vault）整理成结构化 markdown 入库」时，同一条命令：
+
+1. `nx-kn crawl add <目录绝对路径> --name <名> --json` —— 磁盘上存在的目录即本地源
+   （`kind: local`），引擎只支持 skill-seekers；原始目录**只读不写**，
+   产物落在 `sources/<名>/` 并自动登记为知识库
+2. 之后与文档站完全一致：`crawl run` → `index` → `query`
 
 要点：
 

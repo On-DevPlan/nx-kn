@@ -24,6 +24,7 @@
 //   P13 采集移除         crawl remove         → 默认保留文件与知识库登记；--purge 连目录删
 //   P14 守护（watch）     watch（常驻）        → 写一篇新笔记，不手动 index 也能检索到
 //   P15 外部引擎          crawl add + run      → skill-seekers 后端全链路（假引擎，不联网）
+//   P16 本地目录源        crawl add 本地目录   → skill-seekers 整理入库 + 引擎双闸（假引擎，不联网）
 //
 // 隔离：临时 store + 临时 skills 目录 + 临时 vault，绝不碰用户的真实数据。
 // （采集产物目录跟着 store 走，见 core/paths.js 的 sourcesDir()——所以隔离是全覆盖的。）
@@ -563,6 +564,85 @@ test('流水线：skill 安装 → 建库 → 建索引 → 检索 → 增量 �
     );
 
     await runJson(['crawl', 'remove', 'ssfail', '--purge', '--json'], ssEnv);
+  });
+
+  // ---- 阶段 5b：本地目录源（如 Obsidian vault 走整理入库）。假引擎，不联网。 ----
+
+  await t.test('P16 本地目录源：crawl add 本地目录 → skill-seekers 整理 → 自动登记为知识库（假引擎，不联网）', async () => {
+    const fake = join(ROOT, 'tests', 'fixtures', 'fake-skill-seekers.mjs');
+    const ssEnv = { ...env, NX_KN_SKILL_SEEKERS_CMD: JSON.stringify([process.execPath, fake]) };
+
+    // 模拟一个本地 Obsidian vault：含 .obsidian、子目录、中文笔记与一张图片
+    const localVault = join(base, 'Local Vault');
+    mkdirSync(join(localVault, 'notes'), { recursive: true });
+    mkdirSync(join(localVault, '.obsidian'), { recursive: true });
+    writeFileSync(join(localVault, '笔记A.md'), '# 笔记A\n\n本地目录整理测试。\n', 'utf8');
+    writeFileSync(join(localVault, 'notes', '笔记B.md'), '# 笔记B\n\n子目录笔记。\n', 'utf8');
+    writeFileSync(join(localVault, 'pic.png'), 'not really png', 'utf8');
+
+    const add = await runJson(['crawl', 'add', localVault, '--name', 'localvault', '--json'], ssEnv);
+    assert.equal(add.kind, 'local', '存在的目录应被识别为本地源');
+    assert.equal(add.engine, 'skill-seekers', '本地源引擎默认（且只认）skill-seekers');
+    assert.equal(resolve(add.url), resolve(localVault), '本地源的 url 应是 resolve 后的绝对路径');
+
+    const r = await runJson(['crawl', 'run', '--name', 'localvault', '--json'], ssEnv, { timeoutMs: 120_000 });
+    const res = r.results[0];
+    assert.equal(res.kind, 'local');
+    assert.equal(res.engine, 'skill-seekers');
+    assert.equal(res.pages, 2, '假引擎产出 SKILL.md + references/guide.md 两个 md');
+    assert.equal(res.changes.added, 2);
+
+    // 落盘：md 摘进来；png 不摘（只收 .md 的纪律对本地源同样成立）
+    assert.ok(existsSync(join(res.dir, 'SKILL.md')), `应落盘: ${join(res.dir, 'SKILL.md')}`);
+    assert.ok(existsSync(join(res.dir, 'references', 'guide.md')));
+    const skill = readFileSync(join(res.dir, 'SKILL.md'), 'utf8');
+    assert.match(skill, /^---\n/, '整理产物应补 frontmatter（假引擎产出不带）');
+    assert.match(skill, /source: "?.*Local Vault/, 'frontmatter 的 source 指向本地目录');
+
+    // 原始 vault 不被写脏：整理产物落在 sources 目录，不在原目录里长出任何东西
+    assert.ok(!existsSync(join(localVault, 'SKILL.md')), '原始目录不该被写进整理产物');
+
+    // 自动登记为知识库（与文档站源完全同构）
+    const kb = await runJson(['kb', 'list', '--json'], ssEnv);
+    assert.ok(
+      kb.vaults.some((v) => resolve(v.path) === resolve(res.dir)),
+      '本地源的整理产物也应自动登记为知识库'
+    );
+
+    // list 能看到 kind（面板与 CLI 都靠它区分本地源与文档站源）
+    const l = await runJson(['crawl', 'list', '--json'], ssEnv);
+    assert.equal(l.sources.find((s) => s.name === 'localvault').kind, 'local');
+
+    await runJson(['crawl', 'remove', 'localvault', '--purge', '--json'], ssEnv);
+  });
+
+  await t.test('P16b 本地目录源：--engine node 一律拒绝（add 与 run 双闸）', async () => {
+    const fake = join(ROOT, 'tests', 'fixtures', 'fake-skill-seekers.mjs');
+    const ssEnv = { ...env, NX_KN_SKILL_SEEKERS_CMD: JSON.stringify([process.execPath, fake]) };
+    const localVault = join(base, 'Local Vault'); // P16 建的目录还在
+
+    await assert.rejects(
+      () => runJson(['crawl', 'add', localVault, '--name', 'badengine', '--engine', 'node', '--json'], ssEnv),
+      (err) => {
+        const out = `${err.stdout || ''}${err.stderr || ''}${err.message || ''}`;
+        assert.match(out, /本地目录源只支持 skill-seekers/);
+        return true;
+      },
+      '本地源选 node 引擎必须在登记时就响亮拒绝'
+    );
+
+    // 登记（默认引擎）后再用 run --engine node 覆盖，同样拒绝
+    await runJson(['crawl', 'add', localVault, '--name', 'localvault2', '--json'], ssEnv);
+    await assert.rejects(
+      () => runJson(['crawl', 'run', '--name', 'localvault2', '--engine', 'node', '--json'], ssEnv),
+      (err) => {
+        const out = `${err.stdout || ''}${err.stderr || ''}${err.message || ''}`;
+        assert.match(out, /本地目录源只支持 skill-seekers/);
+        return true;
+      },
+      'run 覆盖引擎这条路也要拦住'
+    );
+    await runJson(['crawl', 'remove', 'localvault2', '--purge', '--json'], ssEnv);
   });
 
   // ---- 阶段 4：守护（watch）。真起一个常驻进程，证明「不手动 index 也能检索到」。 ----

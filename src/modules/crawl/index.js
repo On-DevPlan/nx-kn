@@ -29,9 +29,11 @@ function changesLine(c) {
 
 // 一行的「怎么抓的」摘要。内置引擎才有「发现方式」（sitemap / 同域 BFS），
 // 外部引擎的发现与分类在它自己内部完成，报个 sitemap 只会误导。
+// 本地目录源把引擎一栏换成「本地目录整理」——它不抓网页，语义是整理本地文件。
 function howLine(x) {
-  const bits = [`引擎 ${engineLabel(x.engine)}`];
-  if (x.engine !== 'skill-seekers') bits.push(`方式 ${x.via === 'sitemap' ? 'sitemap' : '同域 BFS'}`);
+  const local = x.kind === 'local';
+  const bits = [local ? '本地目录整理' : `引擎 ${engineLabel(x.engine)}`];
+  if (!local && x.engine !== 'skill-seekers') bits.push(`方式 ${x.via === 'sitemap' ? 'sitemap' : '同域 BFS'}`);
   bits.push(`共 ${x.pages} 页`);
   return bits.join(' · ');
 }
@@ -45,8 +47,9 @@ export default {
       id: 'crawl.add',
       cli: [['crawl', 'add']],
       http: ['POST', '/api/crawl/add'],
-      summary: '登记一个文档站采集源（抓取产物落成 markdown 目录并自动登记为知识库）',
-      args: [{ name: 'url' }],
+      summary:
+        '登记一个采集源：文档站 URL 或本地目录（如 Obsidian vault；产物落成 markdown 目录并自动登记为知识库）',
+      args: [{ name: 'url', hint: 'http(s) 地址或本地目录路径' }],
       flags: {
         name: { type: 'string' },
         engine: { type: 'string', enum: service.ENGINES, default: service.DEFAULT_ENGINE },
@@ -68,7 +71,7 @@ export default {
       render: (r) =>
         [
           `采集源: ${r.name}`,
-          `  地址   ${r.url}`,
+          r.kind === 'local' ? `  本地   ${r.url}` : `  地址   ${r.url}`,
           `  引擎   ${engineLabel(r.engine)}` +
             (r.engine === 'skill-seekers'
               ? `（增强级别 ${r.enhanceLevel}${r.agent ? ` · agent ${r.agent}` : ''}）`
@@ -124,7 +127,7 @@ export default {
         if (!r.count) return `还没有采集源 —— 跑 ${hint('crawl add <url> --name <名>')}`;
         const lines = [`共 ${r.count} 个采集源`, ''];
         for (const s of r.sources) {
-          lines.push(`[${s.name}] ${s.url}`);
+          lines.push(`[${s.name}] ${s.url}${s.kind === 'local' ? '（本地目录）' : ''}`);
           lines.push(
             `    ${s.pages} 页` +
               (s.failed ? ` · 失败 ${s.failed}` : '') +

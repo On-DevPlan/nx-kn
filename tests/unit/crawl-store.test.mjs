@@ -84,6 +84,21 @@ test('normalizeCrawl：agent 缺省为 null（不是空串，也不是 undefined
   assert.equal(out.sources[1].agent, 'kimi');
 });
 
+test('normalizeCrawl：kind 只认 local，其余（含缺省/野值）一律 web', () => {
+  const out = normalizeCrawl({
+    sources: [
+      { name: 'vault', url: 'D:\\Obsidian Vault', kind: 'local' },
+      { name: 'site', url: 'https://b.com/' }, // 老记录没有 kind 键
+      { name: 'weird', url: 'https://c.com/', kind: 'local-dir' }, // 不认识的值
+      { name: 'w', url: 'https://d.com/', kind: 'web' },
+    ],
+  });
+  assert.equal(out.sources[0].kind, 'local', '显式 local 必须保留（它决定 run 时引擎只有一条路）');
+  assert.equal(out.sources[1].kind, 'web', '老 store 缺 kind → web，与既有文档站语义一致');
+  assert.equal(out.sources[2].kind, 'web', '野值回落 web 而不是原样带下去');
+  assert.equal(out.sources[3].kind, 'web');
+});
+
 test('normalize：老 store（无 crawl 键）读进来自动补上，不需要迁移脚本', () => {
   const s = normalize({ version: 1, settings: {}, kb: { vaults: [{ path: '/x' }] } });
   assert.deepEqual(s.crawl, { sources: [] });

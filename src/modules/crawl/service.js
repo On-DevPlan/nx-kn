@@ -110,6 +110,30 @@ function deriveName(url) {
   return base || 'site';
 }
 
+// 本地目录源的名字：取路径最后一段（两种分隔符都认，理由同 store.js 的 displayNameOf），
+// 再压成安全目录名。中文保留（`Base-面试` 是完全合法的源名），空白与符号折成连字符。
+function deriveLocalName(path) {
+  const parts = String(path).split(/[\\/]+/).filter(Boolean);
+  const last = parts.length ? parts[parts.length - 1] : String(path);
+  const base = last
+    .replace(/[^A-Za-z0-9\u4e00-\u9fa5._-]+/g, '-')
+    .replace(/^[-.]+/, '')
+    .replace(/-{2,}/g, '-')
+    .slice(0, 60);
+  return base || 'local-dir';
+}
+
+// 判断一个输入是不是「存在的本地目录」。是则返回原样路径（调用方负责 resolve），
+// 不是（不存在 / 是文件）返回 null。存在即是本地源——文档站地址不可能撞上磁盘目录。
+async function toLocalDir(p) {
+  try {
+    const st = await fsp.stat(p);
+    return st.isDirectory() ? p : null;
+  } catch {
+    return null;
+  }
+}
+
 // YAML 标量：标题里可能带冒号、井号、引号、换行。直接塞进 frontmatter 会破坏解析，
 // 所以可疑的一律加引号并转义。多行标题压成单行（frontmatter 不支持真正的多行标量）。
 function yamlScalar(v) {
@@ -155,21 +179,37 @@ export async function storedSources() {
 export async function add({ url, name, include, max, engine, enhanceLevel, agent } = {}) {
   if (!url) {
     throw badInput(
-      `用法: ${APP_NAME} crawl add <url> [--name <名>] [--engine <${ENGINES.join('|')}>] ` +
+      `用法: ${APP_NAME} crawl add <url或本地目录> [--name <名>] [--engine <${ENGINES.join('|')}>] ` +
         `[--enhance-level <0-3>] [--agent <名>] [--match <glob>] [--max <n>]`
     );
   }
 
-  const abs = normalizeUrl(String(url));
-  if (!abs) throw badInput(`不是合法的 http(s) 地址: ${url}`);
+  // 源分两路：存在的本地目录 = local（整理，引擎只认 skill-seekers）；
+  // 否则按文档站 URL 处理。判定只看「磁盘上有没有这个目录」——二者不可能撞车。
+  const rawUrl = String(url);
+  const localDir = await toLocalDir(rawUrl);
+  const abs = localDir ? resolve(localDir) : normalizeUrl(rawUrl);
+  if (!abs) {
+    throw badInput(
+      `不是合法的 http(s) 地址，也不是存在的本地目录: ${url}`
+    );
+  }
 
-  const nm = name ? String(name) : deriveName(abs);
+  const nm = name ? String(name) : localDir ? deriveLocalName(abs) : deriveName(abs);
   assertSafeName(nm, '采集源名');
 
   // 引擎：不合法直接报错，不静默回落 —— 「我明明选了 A，怎么按 B 跑了」是最难查的一类问题。
   const eng = engine === undefined || engine === null || engine === '' ? DEFAULT_ENGINE : String(engine);
   if (!ENGINES.includes(eng)) {
     throw badInput(`--engine 只能是 ${ENGINES.join(' | ')}，收到: ${engine}`);
+  }
+  // 本地目录源只认 skill-seekers：内置引擎是「抓 HTTP 页面」的，对本地目录无能为力；
+  // 而本地源的语义恰恰是「整理」，分类与组织全在外部引擎里。
+  if (localDir && eng !== ENGINE_SS) {
+    throw badInput(
+      `本地目录源只支持 skill-seekers 引擎（收到 --engine ${eng}）——` +
+        `内置 Node 引擎只抓 http(s) 页面，整理不了本地文件`
+    );
   }
 
   // 增强级别 0~3（0 = 纯抓取，不调任何 LLM）。仅对 skill-seekers 有意义，但一律校验、一律存储，
@@ -199,6 +239,7 @@ export async function add({ url, name, include, max, engine, enhanceLevel, agent
   await writeManifest(dir, {
     name: nm,
     url: abs,
+    kind: localDir ? 'local' : 'web',
     engine: eng,
     enhanceLevel: lvl,
     agent: ag,
@@ -214,6 +255,7 @@ export async function add({ url, name, include, max, engine, enhanceLevel, agent
     store.crawl.sources.push({
       name: nm,
       url: abs,
+      kind: localDir ? 'local' : 'web',
       engine: eng,
       enhanceLevel: lvl,
       agent: ag,
@@ -232,6 +274,7 @@ export async function add({ url, name, include, max, engine, enhanceLevel, agent
     status: 'ok',
     name: nm,
     url: abs,
+    kind: localDir ? 'local' : 'web',
     engine: eng,
     enhanceLevel: lvl,
     agent: ag,
@@ -239,7 +282,9 @@ export async function add({ url, name, include, max, engine, enhanceLevel, agent
     include: inc,
     max: mx,
     count: (await storedSources()).length,
-    hint: `跑 ${APP_NAME} crawl run --name ${nm} 开始抓取`,
+    hint: localDir
+      ? `跑 ${APP_NAME} crawl run --name ${nm} 开始整理（skill-seekers）`
+      : `跑 ${APP_NAME} crawl run --name ${nm} 开始抓取`,
   };
 }
 
@@ -259,6 +304,7 @@ export async function list() {
     rows.push({
       name: s.name,
       url: s.url,
+      kind: s.kind === 'local' ? 'local' : 'web',
       engine: engineOf(s, null),
       enhanceLevel: Number.isInteger(s.enhanceLevel) ? s.enhanceLevel : 0,
       agent: s.agent || null,
@@ -571,6 +617,7 @@ async function runOneViaSkillSeekers(s, { rebuild }) {
   const stats = { added: 0, updated: 0, unchanged: 0, failed: 0, skipped: 0 };
   const failures = [];
   const level = Number.isInteger(s.enhanceLevel) ? s.enhanceLevel : 0;
+  const isLocal = s.kind === 'local';
 
   // 让 skill-seekers 在**库外**的临时目录里产出：它的中间产物（SQLite 索引、
   // search.py、各种缓存）不该混进知识库。抓完只把 .md 摘进去。
@@ -578,14 +625,20 @@ async function runOneViaSkillSeekers(s, { rebuild }) {
   let outDir = null;
   try {
     const args = ['create', s.url, '--name', s.name, '--enhance-level', String(level)];
+    // 本地目录源：限定只收 markdown——vault 里还有图片、.obsidian 配置、.zvec-grep
+    // 索引等，整理的对象只是笔记本身。
+    if (isLocal) args.push('--file-patterns', '*.md');
     if (s.agent) args.push('--agent', String(s.agent));
 
     const r = await runSkillSeekers(args, { cwd: scratch, timeoutMs: SKILL_SEEKERS_TIMEOUT_MS });
     if (!r.ok) {
       const detail = (r.stderr || r.stdout || r.error || '').trim().split('\n').slice(0, 8).join('\n  ');
       throw external(
-        `skill-seekers 抓取失败（源：${s.url}）${detail ? `\n  ${detail}` : ''}\n` +
-          `  换内置引擎重试：${APP_NAME} crawl run --name ${s.name} --engine node`
+        `skill-seekers ${isLocal ? '整理' : '抓取'}失败（源：${s.url}）${detail ? `\n  ${detail}` : ''}\n` +
+          (isLocal
+            ? `  本地目录源只支持 skill-seekers：检查 Python 3.10+/uv 环境，` +
+              `或用环境变量 NX_KN_SKILL_SEEKERS_CMD 指定调用命令`
+            : `  换内置引擎重试：${APP_NAME} crawl run --name ${s.name} --engine node`)
       );
     }
 
@@ -593,8 +646,10 @@ async function runOneViaSkillSeekers(s, { rebuild }) {
     if (!outDir) {
       throw external(
         `skill-seekers 跑完了，但没有找到产出目录（预期 ${join(scratch, 'output')} 下有内容）——\n` +
-          `  可能是它的输出布局变了（当前通过 ${describeCandidate({ bin: r.bin, args: [] })} 调用）。\n` +
-          `  换内置引擎试试：${APP_NAME} crawl run --name ${s.name} --engine node`
+          `  可能是它的输出布局变了（当前通过 ${describeCandidate({ bin: r.bin, args: [] })} 调用）。` +
+          (isLocal
+            ? `\n  本地目录源没有备选引擎，请检查 skill-seekers 版本。`
+            : `\n  换内置引擎试试：${APP_NAME} crawl run --name ${s.name} --engine node`)
       );
     }
 
@@ -644,7 +699,9 @@ async function runOneViaSkillSeekers(s, { rebuild }) {
     if (!hadContent) {
       throw external(
         `skill-seekers 没有产出任何 markdown（源：${s.url}）\n` +
-          `  检查地址是否可访问；或用内置引擎对比：${APP_NAME} crawl run --name ${s.name} --engine node`
+          (isLocal
+            ? `  检查目录里是否有 .md 文件，以及 skill-seekers 版本是否支持本地目录`
+            : `  检查地址是否可访问；或用内置引擎对比：${APP_NAME} crawl run --name ${s.name} --engine node`)
       );
     }
   }
@@ -660,6 +717,7 @@ async function runOneViaSkillSeekers(s, { rebuild }) {
   await writeManifest(dir, {
     name: s.name,
     url: s.url,
+    kind: s.kind === 'local' ? 'local' : 'web',
     engine: ENGINE_SS,
     enhanceLevel: level,
     agent: s.agent || null,
@@ -677,6 +735,11 @@ async function runOneViaSkillSeekers(s, { rebuild }) {
 // ================= run：按引擎分派 =================
 
 async function runOne(s, { rebuild, engine }) {
+  // 本地目录源：引擎只有 skill-seekers 一条路。add 时已拦过 --engine node，
+  // 这里拦 run 时的覆盖（老脚本、面板旧参数都可能带过来），双保险。
+  if (s.kind === 'local' && engine !== undefined && engine !== null && engine !== '' && String(engine) !== ENGINE_SS) {
+    throw badInput(`本地目录源只支持 skill-seekers 引擎（收到 --engine ${engine}）`);
+  }
   const eng = engineOf(s, engine);
   const dir = sourceDirOf(s.name);
   const r =
@@ -707,6 +770,7 @@ async function runOne(s, { rebuild, engine }) {
     name: s.name,
     url: s.url,
     dir,
+    kind: s.kind === 'local' ? 'local' : 'web',
     engine: eng,
     via: r.mode,
     enhanceLevel: Number.isInteger(s.enhanceLevel) ? s.enhanceLevel : 0,

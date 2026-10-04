@@ -4,6 +4,21 @@
 
 ## [Unreleased]
 
+### Added — `crawl` 支持本地目录源（把 Obsidian vault 整理入库）
+
+- `crawl add` 的位置参数**既认 http(s) 地址，也认本地目录**：磁盘上存在的目录即登记为
+  本地源（`kind: local`），语义是「整理」而非「抓取」——典型用法是把一个 Obsidian vault
+  交给 skill-seekers 整理成结构化 markdown，再当作知识库检索。判定与 URL 天然二分，不撞车。
+- **本地目录源只支持 `skill-seekers` 引擎**（用户决策）：内置引擎只抓 HTTP 页面，
+  整理不了本地文件。`--engine node` 在 `crawl add` 与 `crawl run` 两处都会被**响亮拒绝**。
+- **原始目录只读**：整理产物落在 `sources/<名>/`（自动登记为知识库），调用 skill-seekers
+  时限定 `--file-patterns *.md`，frontmatter 的 `source` 指向原始目录路径。
+- `--name` 省略时本地源取路径最后一段（`D:\Obsidian Vault` → `Obsidian-Vault`，中文合法）。
+- store 记录与 `.nx-kn-crawl.json` 新增 `kind` 字段（老数据自动补 `web`，无迁移脚本）。
+- 面板「资料采集」对话框与源列表支持本地目录（提示文案与「本地目录」标签）。
+- 测试：`kind` 归一化单测；流水线新增 P16（本地源全链路：登记 → 假引擎整理 → 落盘 →
+  自动登记 → frontmatter/原始目录只读断言）与 P16b（`--engine node` 双闸拒绝）。
+
 ## [0.3.0] - 2026-10-04
 
 ### Changed — 采集默认引擎改为外部 `skill-seekers`，纯 Node 实现保留为内置引擎
