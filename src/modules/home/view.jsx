@@ -1,6 +1,6 @@
 // 首页视图：流水线总览 + 项目信息 + 命令表。
 //
-// 流水线总览把「资料采集 → 知识库」两个 tab 串起来看：
+// 流水线总览把「资料采集 → 知识库」两个阶段串起来看（采集已并入知识库 tab）：
 // 抓取和索引是前后关系不是选择关系，这里给出阶段状态 + 一键跑完整条链。
 // 每个数字都来自 /api（不是硬编码），每个操作都有等价 CLI（CliHints）。
 import { useCallback, useEffect, useState } from 'react';
@@ -118,9 +118,9 @@ function PipelineOverview() {
             <span className="tag">{loading ? '…' : `${crawl.count} 个源`}</span>
             <a
               className="tag"
-              href="#/crawl"
-              onClick={() => patchUi({ view: 'crawl' })}
-              title="去资料采集页管理源"
+              href="#/kb"
+              onClick={() => patchUi({ view: 'kb' })}
+              title="去知识库页管理采集源"
             >
               管理 →
             </a>
@@ -133,7 +133,7 @@ function PipelineOverview() {
             [{s.name}] {s.kind === 'local' ? '本地目录' : s.url} · {s.pages ?? 0} 页 · 上次 {fmtTime(s.lastRunAt)}
           </div>
         ))}
-        {!loading && !sources.length && <div className="desc muted">还没有采集源 —— 去「资料采集」添加</div>}
+        {!loading && !sources.length && <div className="desc muted">还没有采集源 —— 去「知识库」页添加</div>}
       </Stage>
 
       <Stage

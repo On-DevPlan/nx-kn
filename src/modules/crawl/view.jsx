@@ -3,12 +3,14 @@
 // 只做两件事——让采集源可见（有哪些源、用什么引擎、抓到多少页、上次什么时候抓的），
 // 让采集可操作（添加源 / 抓取 / 移除）。所有操作都有一条同构 CLI 命令（CliHints）。
 //
-// 采集完成后抓下来的目录会**自动登记为知识库**，所以这个页面本身不做检索——
-// 检索在「知识库」页。这里只负责把外部资料变成可被检索的 markdown。
+// 采集完成后抓下来的目录会**自动登记为知识库**，所以这里不做检索——
+// 检索在同一页下方（本视图整块嵌在知识库 tab 顶部，采集是上游阶段，不是并列 tab）。
+// 抓取/整理会改变库列表，完成后广播 kb-changed 让下方的知识库列表即时刷新。
 import { useCallback, useEffect, useState } from 'react';
 import { api } from '../../web/frontend/api/client.js';
 import { CliHints } from '../../web/frontend/components/CliHints.jsx';
 import { useDialog, useToast } from '../../web/frontend/components/ui.jsx';
+import { emitKbChanged } from '../../web/frontend/events.js';
 
 // 抓取是慢操作（内置引擎串行 + 300ms 节流，几百页可能要几分钟；外部引擎还要先拉依赖）。
 // 给一个宽松的上限，避免请求被前端提前掐断。
@@ -110,6 +112,7 @@ export default function CrawlView() {
             `[${out.name}] 整理 + 索引完成：新增 ${t.added} / 更新 ${t.updated} / 未变 ${t.unchanged}` +
               (p.status !== 'ok' ? ' · 有步骤失败，见采集页' : '')
           );
+          emitKbChanged();
           await refresh();
         } catch (e) {
           toast(`已登记，但流水线失败：${e.message || e}——可稍后在首页点「一键跑流水线」重试`);
@@ -143,6 +146,7 @@ export default function CrawlView() {
         `已${rebuild ? '全量重抓' : '抓取更新'} ${out.count} 个源：新增 ${t.added} / 更新 ${t.updated} / 未变 ${t.unchanged}` +
           (t.failed ? ` · 失败 ${t.failed} 页` : '')
       );
+      emitKbChanged();
       await refresh();
     } catch (e) {
       toast(String(e.message || e));

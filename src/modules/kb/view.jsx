@@ -3,10 +3,15 @@
 // 只做三件事——让状态可见（zg 在不在、有哪些库、各自的索引到哪一步），
 // 让库可管理（添加 / 移除），让检索可用（搜、看命中、点开片段）。
 // 所有操作都有一条同构 CLI 命令（CliHints）。
-import { useCallback, useEffect, useState } from 'react';
+import { Suspense, lazy, useCallback, useEffect, useState } from 'react';
 import { api } from '../../web/frontend/api/client.js';
 import { CliHints } from '../../web/frontend/components/CliHints.jsx';
 import { useDialog, useToast } from '../../web/frontend/components/ui.jsx';
+import { onKbChanged } from '../../web/frontend/events.js';
+
+// 采集是知识库的上游阶段（抓取 → 索引 → 检索是一条流水线），整块嵌入本页顶部，
+// 不再单独占一个 tab——registry.js 里 crawl 标记 tab: false。
+const CrawlView = lazy(() => import('../crawl/view.jsx'));
 
 const LIMIT = 7;
 // 新建库时的默认 embedding 兜底值：本机离线、免 key、中文可用（1024 维）。
@@ -79,6 +84,10 @@ export default function KbView() {
   }, []);
 
   useEffect(() => { refresh(); refreshWatch(); }, [refresh, refreshWatch]);
+
+  // 同 tab 的采集动作（抓取/整理/流水线）完成时广播 kb-changed，
+  // 这里跟着刷新库列表——否则「刚抓完的源已自动登记为知识库」要等手动刷新才可见。
+  useEffect(() => onKbChanged(() => { refresh(); }), [refresh]);
 
   // 跑着的时候才轮询：没跑时它不会自己变，白轮询只是浪费。
   useEffect(() => {
@@ -216,6 +225,11 @@ export default function KbView() {
   return (
     <div className="stack">
       {dialogNode}
+
+      {/* 上游阶段：资料采集（抓取/整理 → 自动登记为知识库）。抓完会广播事件刷新下方库列表 */}
+      <Suspense fallback={<div className="muted" style={{ padding: 24 }}>加载采集面板…</div>}>
+        <CrawlView />
+      </Suspense>
 
       <div className="card">
         <div className="colhead">

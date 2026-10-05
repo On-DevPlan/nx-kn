@@ -12,7 +12,9 @@ function viewFromHash() {
 
 export default function App() {
   const { ui, patchUi, boot, refreshBoot } = useStore();
-  const views = VIEWS;
+  // 只有 tab: false 之外的视图才出现在导航与 hash 路由里；
+  // 嵌入视图（如 crawl）由宿主视图（kb）整块渲染，不单独可达。
+  const views = VIEWS.filter((v) => v.tab !== false);
 
   // 窗口聚焦时刷新 bootstrap：别的终端改了状态，这里能看到。
   useEffect(() => {
