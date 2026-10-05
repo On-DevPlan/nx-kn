@@ -60,7 +60,8 @@ export default function CrawlView() {
       message:
         '填入一个文档站地址，或一个本地目录路径（如 Obsidian vault）。\n' +
         '文档站：抓取页面清洗成 markdown；本地目录：用 Skill Seekers 整理成结构化 markdown。\n' +
-        '两者都会自动登记为知识库。默认引擎 Skill Seekers（需 Python 3.10+/uv）；\n' +
+        '本地目录添加后会**立即整理并建索引**（一步到位，跑完即可检索）；\n' +
+        '文档站默认只登记，之后点「抓取更新」。默认引擎 Skill Seekers（需 Python 3.10+/uv）；\n' +
         '站点是纯静态 HTML 且想零依赖时，可对文档站选内置 Node（本地目录只支持 Skill Seekers）。',
       fields: [
         {
@@ -96,6 +97,24 @@ export default function CrawlView() {
       });
       toast(`已添加采集源 [${out.name}] · 引擎 ${engineLabel(out.engine)}`);
       await refresh();
+
+      // 本地目录源一步到位：添加完直接跑「抓取 → 索引」流水线（只跑这个源）。
+      // 提供目录就抓取该目录——这是本地源的既定语义，不用再让用户多按一次按钮。
+      if (out.kind === 'local') {
+        setBusy('run');
+        try {
+          const p = await api('/api/pipeline/run', { method: 'POST', body: { name: out.name }, timeoutMs: CRAWL_TIMEOUT });
+          const crawl = p.steps.find((s) => s.id === 'crawl');
+          const t = (crawl && crawl.result && crawl.result.totals) || {};
+          toast(
+            `[${out.name}] 整理 + 索引完成：新增 ${t.added} / 更新 ${t.updated} / 未变 ${t.unchanged}` +
+              (p.status !== 'ok' ? ' · 有步骤失败，见采集页' : '')
+          );
+          await refresh();
+        } catch (e) {
+          toast(`已登记，但流水线失败：${e.message || e}——可稍后在首页点「一键跑流水线」重试`);
+        }
+      }
     } catch (e) {
       toast(String(e.message || e));
     } finally {

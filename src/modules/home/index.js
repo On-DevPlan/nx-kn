@@ -67,13 +67,23 @@ export default {
       id: 'home.pipeline',
       cli: ['pipeline'],
       http: ['POST', '/api/pipeline/run'],
-      summary: '一键流水线：抓取采集源 → 更新索引（两步串联；没有源/库的步骤自动跳过）',
-      flags: { rebuild: { type: 'boolean', hint: '全量重抓 + 全量重建索引（默认都走增量）' } },
-      run: (ctx) => service.pipeline({ rebuild: ctx.rebuild }),
+      summary:
+        '一键流水线：抓取 → 更新索引（两步串联）。传目录/URL 未登记会自动登记；传源名只跑该源',
+      args: [{ name: 'target', required: false, hint: '本地目录、文档站 URL 或已有源名（可省略 = 全部源）' }],
+      flags: {
+        rebuild: { type: 'boolean', hint: '全量重抓 + 全量重建索引（默认都走增量）' },
+        name: { type: 'string', hint: '只跑这个源（与位置参数二选一）' },
+      },
+      run: (ctx) => service.pipeline({ rebuild: ctx.rebuild, target: ctx.target, name: ctx.name }),
       render: (r) => {
         const lines = [];
         for (const s of r.steps) {
-          if (s.id === 'crawl') {
+          if (s.id === 'register') {
+            if (s.status === 'failed') lines.push(`⓪ 登记：失败 —— ${s.error}`);
+            else {
+              lines.push(`⓪ 登记：[${s.result.name}] ${s.result.added ? '新登记' : '已存在，复用现源'}`);
+            }
+          } else if (s.id === 'crawl') {
             if (s.status === 'skipped') lines.push(`① 抓取：跳过（${s.note}）`);
             else if (s.status === 'failed') lines.push(`① 抓取：失败 —— ${s.error}`);
             else {

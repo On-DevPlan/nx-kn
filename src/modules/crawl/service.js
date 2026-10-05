@@ -288,6 +288,25 @@ export async function add({ url, name, include, max, engine, enhanceLevel, agent
   };
 }
 
+// 幂等登记：pipeline 一步直达的入口用。同一个 URL/目录已有源就直接复用，
+// 没有才真的 add——于是「重复提供同目录」语义退化为增量重跑，而不是报冲突。
+// 解析规则与 add 完全一致（存在的本地目录 = local，否则按 http(s) URL）。
+export async function ensureSource({ url, name, include, max, engine, enhanceLevel, agent } = {}) {
+  if (!url) throw badInput(`用法: ${APP_NAME} pipeline <目录或URL>（或先 crawl add 登记）`);
+  const raw = String(url);
+  const localDir = await toLocalDir(raw);
+  const abs = localDir ? resolve(localDir) : normalizeUrl(raw);
+  if (!abs) {
+    throw badInput(`不是合法的 http(s) 地址，也不是存在的本地目录: ${url}`);
+  }
+  const hit = (await storedSources()).find((s) => s.url === abs);
+  if (hit) {
+    return { name: hit.name, url: hit.url, kind: hit.kind === 'local' ? 'local' : 'web', engine: hit.engine, added: false };
+  }
+  const r = await add({ url: raw, name, include, max, engine, enhanceLevel, agent });
+  return { name: r.name, url: r.url, kind: r.kind, engine: r.engine, added: true };
+}
+
 // ---- list：源列表 + 上次抓取统计 ----
 
 export async function list() {

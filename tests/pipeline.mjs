@@ -26,6 +26,7 @@
 //   P15 外部引擎          crawl add + run      → skill-seekers 后端全链路（假引擎，不联网）
 //   P16 本地目录源        crawl add 本地目录   → skill-seekers 整理入库 + 引擎双闸（假引擎，不联网）
 //   P17 一键流水线        pipeline             → 抓取 + 索引一条命令串完 + 幂等（假引擎，不联网）
+//   P18 一步直达          pipeline <目录>      → 未登记自动登记再抓取 + 索引；同目录重复 = 增量
 //
 // 隔离：临时 store + 临时 skills 目录 + 临时 vault，绝不碰用户的真实数据。
 // （采集产物目录跟着 store 走，见 core/paths.js 的 sourcesDir()——所以隔离是全覆盖的。）
@@ -747,5 +748,43 @@ test('流水线：skill 安装 → 建库 → 建索引 → 检索 → 增量 �
     assert.equal(crawl2.result.totals.unchanged, 2, '内容没变，第二遍应当全部 unchanged');
 
     await runJson(['crawl', 'remove', 'pipevault', '--purge', '--json'], ssEnv);
+  });
+
+  await t.test('P18 一步直达：pipeline <目录> 自动登记 + 整理 + 索引；同目录重复执行 = 增量（假引擎，不联网）', async () => {
+    const fake = join(ROOT, 'tests', 'fixtures', 'fake-skill-seekers.mjs');
+    const ssEnv = { ...env, NX_KN_SKILL_SEEKERS_CMD: JSON.stringify([process.execPath, fake]) };
+    const localVault = join(base, 'Local Vault'); // P16 建的目录还在，源已被其清理
+
+    // 不先 crawl add——把目录直接交给 pipeline，登记 → 抓取 → 索引一条命令完成
+    const r = await runJson(['pipeline', localVault, '--json'], ssEnv, { timeoutMs: 300_000 });
+    assert.equal(r.status, 'ok', '三步都成功时整体才是 ok');
+    const reg = r.steps.find((s) => s.id === 'register');
+    assert.ok(reg, '应有登记步骤');
+    assert.equal(reg.result.added, true, '未登记的目录应自动登记');
+    assert.equal(reg.result.name, 'Local-Vault', '不给 --name 时从目录名推导（空格折成连字符）');
+    const crawl = r.steps.find((s) => s.id === 'crawl');
+    assert.equal(crawl.status, 'ok');
+    assert.equal(crawl.result.count, 1, '只跑刚登记的这一个源');
+    assert.equal(crawl.result.results[0].changes.added, 2, '假引擎产出 2 个 md');
+
+    // 链路收口：一步直达跑完即可检索（不再跑任何 index/query）
+    const hit = await runJson(['query', 'skseeker-root-word', '--json'], ssEnv, { timeoutMs: 120_000 });
+    assert.ok(
+      hit.hits.some((h) => resolve(h.vault).includes('Local-Vault')),
+      'pipeline <目录> 跑完的产物应无需任何后续命令即可被检索到'
+    );
+
+    // 幂等：同目录再跑——复用现源不重复登记，内容没变全 unchanged
+    const r2 = await runJson(['pipeline', localVault, '--json'], ssEnv, { timeoutMs: 300_000 });
+    const reg2 = r2.steps.find((s) => s.id === 'register');
+    assert.equal(reg2.result.added, false, '同目录重复提供应复用现源，而不是报冲突');
+    const crawl2 = r2.steps.find((s) => s.id === 'crawl');
+    assert.equal(crawl2.result.totals.unchanged, 2, '内容没变，第二遍应当全部 unchanged');
+
+    // 按源名直达也通（target 先按源名匹配）
+    const r3 = await runJson(['pipeline', 'Local-Vault', '--json'], ssEnv, { timeoutMs: 300_000 });
+    assert.equal(r3.steps.find((s) => s.id === 'register').result.added, false, '源名应直接命中现源');
+
+    await runJson(['crawl', 'remove', 'Local-Vault', '--purge', '--json'], ssEnv);
   });
 });
