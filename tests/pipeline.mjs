@@ -25,6 +25,7 @@
 //   P14 守护（watch）     watch（常驻）        → 写一篇新笔记，不手动 index 也能检索到
 //   P15 外部引擎          crawl add + run      → skill-seekers 后端全链路（假引擎，不联网）
 //   P16 本地目录源        crawl add 本地目录   → skill-seekers 整理入库 + 引擎双闸（假引擎，不联网）
+//   P17 一键流水线        pipeline             → 抓取 + 索引一条命令串完 + 幂等（假引擎，不联网）
 //
 // 隔离：临时 store + 临时 skills 目录 + 临时 vault，绝不碰用户的真实数据。
 // （采集产物目录跟着 store 走，见 core/paths.js 的 sourcesDir()——所以隔离是全覆盖的。）
@@ -711,5 +712,40 @@ test('流水线：skill 安装 → 建库 → 建索引 → 检索 → 增量 �
     } finally {
       stop();
     }
+  });
+
+  // ---- 阶段 6：一键流水线。抓取 → 索引是一条链上的前后两步，pipeline 把它们串完。 ----
+
+  await t.test('P17 一键流水线：pipeline = 抓取 → 索引串完，结束即可检索，幂等重跑全未变（假引擎，不联网）', async () => {
+    const fake = join(ROOT, 'tests', 'fixtures', 'fake-skill-seekers.mjs');
+    const ssEnv = { ...env, NX_KN_SKILL_SEEKERS_CMD: JSON.stringify([process.execPath, fake]) };
+    const localVault = join(base, 'Local Vault'); // P16 建的目录还在
+
+    // P16/P16b 清掉了自己的源，这里重新登记一个本地源
+    await runJson(['crawl', 'add', localVault, '--name', 'pipevault', '--json'], ssEnv);
+
+    const r = await runJson(['pipeline', '--json'], ssEnv, { timeoutMs: 300_000 });
+    assert.equal(r.status, 'ok', '两步都成功时整体才是 ok');
+    const crawl = r.steps.find((s) => s.id === 'crawl');
+    const index = r.steps.find((s) => s.id === 'index');
+    assert.equal(crawl.status, 'ok', '有源时抓取步骤必须真跑');
+    assert.equal(crawl.result.results[0].changes.added, 2, '假引擎产出 2 个 md');
+    assert.equal(index.status, 'ok', '有库时索引步骤必须真跑（P14 重新登记的 vaultA + 本步产物）');
+    assert.ok(index.result.results.length >= 2, `应至少索引 2 个库（vaultA + pipevault 产物），实际 ${index.result.results.length}`);
+
+    // 链路收口：pipeline 结束后不跑任何 index/query，直接检索必须命中刚抓的产物
+    const hit = await runJson(['query', 'skseeker-root-word', '--json'], ssEnv, { timeoutMs: 120_000 });
+    assert.ok(
+      hit.hits.some((h) => resolve(h.vault).includes('pipevault')),
+      'pipeline 跑完的产物应无需任何后续命令即可被检索到'
+    );
+
+    // 幂等：再跑一遍，抓取全未变、索引仍 ok（增量）
+    const r2 = await runJson(['pipeline', '--json'], ssEnv, { timeoutMs: 300_000 });
+    assert.equal(r2.status, 'ok');
+    const crawl2 = r2.steps.find((s) => s.id === 'crawl');
+    assert.equal(crawl2.result.totals.unchanged, 2, '内容没变，第二遍应当全部 unchanged');
+
+    await runJson(['crawl', 'remove', 'pipevault', '--purge', '--json'], ssEnv);
   });
 });

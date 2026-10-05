@@ -56,6 +56,7 @@ CLI 与 Web 面板共享同一份 action 声明。需要时还能把**文档站�
 | `nx-kn crawl run [--name N] [--engine E] [--rebuild]` | 抓取并清洗成 markdown；默认增量（内容未变的页面不重写）。`--engine` 可临时覆盖源上存的引擎 |
 | `nx-kn crawl list` | 采集源列表 + 上次抓取时间 / 页数 / 失败数 |
 | `nx-kn crawl remove <name> [--purge]` | 解登记（默认保留抓下来的文件与知识库登记；`--purge` 连目录一起删） |
+| `nx-kn pipeline [--rebuild]` | **一键流水线**：抓取全部源 → 更新全部索引，两步串联（前后关系不是选择关系）。抓取失败不阻断索引；没有源/库的步骤自动跳过；跑完即可 `query` |
 | `nx-kn watch [--debounce ms]` | **守护**：常驻监听各库，笔记一变就自动增量索引（Ctrl+C 停）。改完笔记要立刻搜到就用它 |
 | `nx-kn watch status` | 守护状态：是否在跑、监听哪些库、最近刷新记录 |
 | `nx-kn serve [--port N] [--no-open] [--no-watch]` | 启动 Web 面板（**默认带守护**；`--no-watch` 关掉，面板上也有开关） |
@@ -129,6 +130,7 @@ CLI 与 Web 面板共享同一份 action 声明。需要时还能把**文档站�
    （`kind: local`），引擎只支持 skill-seekers；原始目录**只读不写**，
    产物落在 `sources/<名>/` 并自动登记为知识库
 2. 之后与文档站完全一致：`crawl run` → `index` → `query`
+   （懒办法：登记完直接 `nx-kn pipeline --json`，抓取 + 索引一条命令串完）
 
 要点：
 

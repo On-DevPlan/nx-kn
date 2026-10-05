@@ -64,6 +64,43 @@ export default {
         `正常 · ${r.app} v${r.version} · ${r.commands} 条命令\n存储: ${r.storePath}`,
     },
     {
+      id: 'home.pipeline',
+      cli: ['pipeline'],
+      http: ['POST', '/api/pipeline/run'],
+      summary: '一键流水线：抓取采集源 → 更新索引（两步串联；没有源/库的步骤自动跳过）',
+      flags: { rebuild: { type: 'boolean', hint: '全量重抓 + 全量重建索引（默认都走增量）' } },
+      run: (ctx) => service.pipeline({ rebuild: ctx.rebuild }),
+      render: (r) => {
+        const lines = [];
+        for (const s of r.steps) {
+          if (s.id === 'crawl') {
+            if (s.status === 'skipped') lines.push(`① 抓取：跳过（${s.note}）`);
+            else if (s.status === 'failed') lines.push(`① 抓取：失败 —— ${s.error}`);
+            else {
+              const t = s.result.totals || {};
+              lines.push(
+                `① 抓取：${s.result.count} 个源 · 新增 ${t.added} / 更新 ${t.updated} / 未变 ${t.unchanged}` +
+                  (t.failed ? ` · 失败 ${t.failed} 页` : '')
+              );
+            }
+          } else if (s.id === 'index') {
+            if (s.status === 'skipped') lines.push(`② 索引：跳过（${s.note}）`);
+            else if (s.status === 'failed') lines.push(`② 索引：失败 —— ${s.error}`);
+            else {
+              const rs = s.result.results || [];
+              const files = rs.reduce((a, v) => a + (v.index?.files ?? 0), 0);
+              const filesTotal = rs.reduce((a, v) => a + (v.index?.filesTotal ?? 0), 0);
+              const entities = rs.reduce((a, v) => a + (v.index?.entities ?? 0), 0);
+              lines.push(`② 索引：${s.result.count} 个库 · 覆盖 ${files}/${filesTotal} 文件 · ${entities} 片段`);
+            }
+          }
+        }
+        lines.push('', `用时 ${((r.elapsedMs || 0) / 1000).toFixed(1)}s · ${r.hint}`);
+        if (r.status === 'failed') lines.push('（有步骤失败——细节见上；索引步骤基于抓取结果重跑一次往往无益，先修抓取）');
+        return lines.join('\n');
+      },
+    },
+    {
       id: 'home.store',
       cli: ['store', 'path'],
       http: ['GET', '/api/store'],

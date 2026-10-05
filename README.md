@@ -65,6 +65,13 @@ nx-kn query "笔记里写了什么"                            # 检索整理产
 本地目录源只支持 skill-seekers 引擎（`--engine node` 会被拒绝）；要不要保留原库的
 `kb add` 登记自便——只想用整理产物检索时 `kb remove <原路径>` 解除原库即可。
 
+嫌两条命令麻烦？**一键流水线**把「抓取 → 索引」串完（抓取和索引是前后关系，
+不是选择关系；首页面板的「一键跑流水线」按钮就是这条链）：
+
+```bash
+nx-kn pipeline          # 抓取全部源（增量）→ 更新全部索引（增量），跑完即可检索
+```
+
 `query` 的输出带一段归属头（每个库的根 + 库名）；多库时命中带 `[库名]` 前缀，
 agent 拿到后可以拼出绝对路径去读全文。`--json` 给结构化 `hits[]`
 （`path / start / end / heading / snippet / matchedBy / score / vault / vaultName`）。
