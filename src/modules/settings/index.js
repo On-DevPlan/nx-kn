@@ -4,6 +4,7 @@
 // 两个示例域加起来把「读」与「写」两条链路都示范完了。
 import * as service from './service.js';
 import { APP_NAME } from '../../core/paths.js';
+import { badInput } from '../../core/errors/index.js';
 
 const APP_NAME_HINT = APP_NAME + ' settings';
 
@@ -36,9 +37,9 @@ export default {
         for (const p of ctx.pairs || []) {
           const i = String(p).indexOf('=');
           if (i <= 0) {
-            const err = new Error(`设置项需形如 k=v，收到: ${p}（如: ${APP_NAME_HINT} set theme=dark）`);
-            err.code = 'INVALID_INPUT';
-            return Promise.reject(err);
+            // 必须抛 NxError：toErrorPayload 只认它 instanceof，非 NxError 上手动赋
+            // `err.code` 会被丢掉、一律归成 INTERNAL（实测 HTTP 会返回 500 而非 400）。
+            throw badInput(`设置项需形如 k=v，收到: ${p}（如: ${APP_NAME_HINT} set theme=dark）`);
           }
           patch[String(p).slice(0, i)] = String(p).slice(i + 1);
         }

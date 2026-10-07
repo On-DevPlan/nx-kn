@@ -5,7 +5,6 @@ import { useEffect, useState } from 'react';
 import { api } from '../../web/frontend/api/client.js';
 import { CliHints } from '../../web/frontend/components/CliHints.jsx';
 import { useToast } from '../../web/frontend/components/ui.jsx';
-import { useStore } from '../../web/frontend/store.jsx';
 
 // 示例键的控件声明：视图层自己的小事，不必进 schema。
 const FORM = [
@@ -15,8 +14,6 @@ const FORM = [
 
 export default function SettingsView() {
   const toast = useToast();
-  const { boot } = useStore();
-  const appName = boot?.app?.name || 'app';
   const [draft, setDraft] = useState({});
   const [saved, setSaved] = useState({});
   const [err, setErr] = useState('');
@@ -79,8 +76,8 @@ export default function SettingsView() {
             {dirty ? '保存' : '无改动'}
           </button>
         </div>
-        <CliHints command={`${appName} settings set theme=dark   # CLI 写同一份数据`} />
-        <CliHints command={`${appName} settings get            # CLI 读同一份数据`} />
+        <CliHints id="settings.set" note="CLI 写同一份数据" />
+        <CliHints id="settings.get" note="CLI 读同一份数据" />
       </div>
     </div>
   );

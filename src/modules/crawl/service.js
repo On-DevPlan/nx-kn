@@ -31,7 +31,7 @@ import { createHash } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import fsp from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { basename, dirname, join, relative, resolve, sep } from 'node:path';
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { badInput, conflict, external, notFound } from '../../core/errors/index.js';
 import { loadStore, mutateStore } from '../../core/store.js';
 import {
@@ -165,6 +165,71 @@ async function writeManifest(dir, data) {
   const tmp = p + '.tmp';
   await fsp.writeFile(tmp, JSON.stringify(data, null, 2), 'utf8');
   await fsp.rename(tmp, p); // 原子写：抓一半中断不会留下半个清单
+}
+
+// ---- 陈旧产物清理：上次记录过、本次不再产出的 .md ----
+//
+// 两个来源的「陈旧文件」都由它兜住：
+//   1. **远端已删的页面** —— 它从 manifest.pages 里消失了，文件却还在盘上，
+//      于是继续被索引、继续被检索到（用户翻到的是一篇早就不存在的文档）。
+//   2. **换引擎的残留** —— node 与 skill-seekers 的落盘命名空间不同，
+//      换引擎后旧引擎的文件不会被任何一次抓取覆盖，只会和新的一套并存
+//      （同一内容两份命中，白占 --limit 名额）。
+// 少了它，sources/ 目录会随使用时间单向增长，且没有任何机制能让它缩小。
+//
+// ⚠️ 第三個参数必须是「**本次真正产出**的文件名集合」（fresh），而不是本次写出的
+// manifest.pages —— 后者是从上一次的清单**继承**来的（增量语义需要它做 unchanged 判定），
+// 远端已删的页面因此会一直留在里面；拿它当保留集合，清理就永远一个都删不掉
+// （第一版实现正是错在这里，P11b 抓到了）。
+//
+// 清理集合刻意**只取上一次 manifest 记录过的文件**：手工放进 sources/<名>/ 的
+// 东西不在名单里，永远不会被误删。
+//
+// 只在本次确有产出时调用（produced > 0）。站点临时抽风导致「一页都没抓到」时，
+// 按「上一次的成果不作废」这条既有纪律，一个文件都不动。
+async function pruneStalePages(dir, prevManifest, fresh) {
+  const candidates = new Set();
+  for (const rec of Object.values((prevManifest && prevManifest.pages) || {})) {
+    if (rec && rec.file) candidates.add(String(rec.file));
+  }
+
+  const removed = [];
+  for (const rel of candidates) {
+    if (fresh.has(rel)) continue;
+    // manifest 是磁盘上的普通文件，不能当可信输入：只删「确实落在源目录内」的 .md
+    if (!/\.md$/i.test(rel)) continue;
+    const abs = resolve(dir, rel);
+    const back = relative(dir, abs);
+    if (!back || back.startsWith('..') || isAbsolute(back)) continue;
+    try {
+      await fsp.rm(abs, { force: true });
+    } catch {
+      continue; // 删不掉就留着：多一份内容远好过误删
+    }
+    removed.push(rel);
+    await pruneEmptyDirs(dirname(abs), dir);
+  }
+  return removed;
+}
+
+// 删完文件顺手收掉空目录，否则 sources/<名>/ 会留下一堆空壳。
+// 从最深的目录往上走，遇到非空 / 越界 / 到源目录根就停。
+async function pruneEmptyDirs(start, stopAt) {
+  const root = resolve(stopAt);
+  let cur = resolve(start);
+  while (cur !== root) {
+    const rel = relative(root, cur);
+    if (!rel || rel.startsWith('..') || isAbsolute(rel)) return;
+    try {
+      if ((await fsp.readdir(cur)).length) return;
+      await fsp.rmdir(cur);
+    } catch {
+      return;
+    }
+    const up = dirname(cur);
+    if (up === cur) return;
+    cur = up;
+  }
 }
 
 // ---- store 里的源列表 ----
@@ -416,9 +481,14 @@ async function runOneViaNode(s, { rebuild }) {
   // （ss 按它自己的分类目录落盘），沿用旧映射只会得到一堆假的「未变」。
   const sameEngine = manifest.engine !== ENGINE_SS;
   const prev = !rebuild && sameEngine && manifest.pages ? manifest.pages : {};
-  const next = { ...(sameEngine ? manifest.pages || {} : {}) };
+  // next 只装**本次产出**的页面，不再从上一次的清单继承——
+  // 继承正是「远端已删的页面永远留在 manifest 里」的根源（见 pruneStalePages 的注释）。
+  // 上一次的映射已由 prev 持有，unchanged 判定不受影响。
+  const next = {};
+  // 本次真正落盘/确认过的文件名，给陈旧产物清理当「保留集合」
+  const fresh = new Set();
 
-  const stats = { added: 0, updated: 0, unchanged: 0, failed: 0, skipped: 0 };
+  const stats = { added: 0, updated: 0, unchanged: 0, failed: 0, skipped: 0, removed: 0 };
   const failures = [];
   const delay = crawlDelayMs();
   let firstReq = true;
@@ -472,6 +542,7 @@ async function runOneViaNode(s, { rebuild }) {
     }
 
     next[u] = { file, hash, title: title || null };
+    fresh.add(file);
     return { links };
   };
 
@@ -552,6 +623,11 @@ async function runOneViaNode(s, { rebuild }) {
     }
   }
 
+  // 清理陈旧产物（远端已删的页面 / 换引擎留下的另一套命名空间）。
+  // 只在本次确有产出时做——理由见 pruneStalePages 的注释。
+  const removed = produced > 0 ? await pruneStalePages(dir, manifest, fresh) : [];
+  stats.removed = removed.length;
+
   await writeManifest(dir, {
     name: s.name,
     url: s.url,
@@ -566,7 +642,7 @@ async function runOneViaNode(s, { rebuild }) {
     pages: next,
   });
 
-  return { mode, stats, failures, pages: Object.keys(next).length, produced };
+  return { mode, stats, failures, pages: Object.keys(next).length, produced, removed };
 }
 
 // ================= 引擎 B：Skill Seekers =================
@@ -631,9 +707,11 @@ async function runOneViaSkillSeekers(s, { rebuild }) {
   const manifest = (await readManifest(dir)) || {};
   const sameEngine = manifest.engine === ENGINE_SS;
   const prev = !rebuild && sameEngine && manifest.pages ? manifest.pages : {};
-  const next = { ...(sameEngine ? manifest.pages || {} : {}) };
+  // 与内置引擎同一条规矩：next 只装本次产出，不从上一次继承（见 pruneStalePages）。
+  const next = {};
+  const fresh = new Set();
 
-  const stats = { added: 0, updated: 0, unchanged: 0, failed: 0, skipped: 0 };
+  const stats = { added: 0, updated: 0, unchanged: 0, failed: 0, skipped: 0, removed: 0 };
   const failures = [];
   const level = Number.isInteger(s.enhanceLevel) ? s.enhanceLevel : 0;
   const isLocal = s.kind === 'local';
@@ -705,6 +783,7 @@ async function runOneViaSkillSeekers(s, { rebuild }) {
         else stats.added++;
       }
       next[rel] = { file: rel, hash, title: firstHeading(raw) };
+      fresh.add(rel);
     }
   } finally {
     await fsp.rm(scratch, { recursive: true, force: true });
@@ -733,6 +812,10 @@ async function runOneViaSkillSeekers(s, { rebuild }) {
       ? `skill-seekers 不受 --max 控制：实际产出 ${produced} 页（登记上限 ${max}，未截断）`
       : null;
 
+  // 清理陈旧产物：与内置引擎同一套判据（远端已删的页面 / 换引擎的残留）。
+  const removed = produced > 0 ? await pruneStalePages(dir, manifest, fresh) : [];
+  stats.removed = removed.length;
+
   await writeManifest(dir, {
     name: s.name,
     url: s.url,
@@ -748,7 +831,7 @@ async function runOneViaSkillSeekers(s, { rebuild }) {
     pages: next,
   });
 
-  return { mode: ENGINE_SS, stats, failures, pages: Object.keys(next).length, produced, note };
+  return { mode: ENGINE_SS, stats, failures, pages: Object.keys(next).length, produced, note, removed };
 }
 
 // ================= run：按引擎分派 =================
@@ -765,6 +848,7 @@ async function runOne(s, { rebuild, engine }) {
     eng === ENGINE_SS ? await runOneViaSkillSeekers(s, { rebuild }) : await runOneViaNode(s, { rebuild });
 
   const now = new Date().toISOString();
+  let overlapsWith = null; // 产物与它的源库内容重叠时，记下源库名
   await mutateStore((store) => {
     const rec = store.crawl.sources.find((x) => x.name === s.name);
     if (rec) {
@@ -776,13 +860,61 @@ async function runOne(s, { rebuild, engine }) {
       rec.include = s.include;
       rec.max = s.max;
     }
+
+    const productPath = resolve(dir);
+    const existing = store.kb.vaults.find((v) => resolve(String(v.path)) === productPath);
+
     // 抓下来的目录**自动登记为知识库**（与手动 kb add 的结果完全同构）。
     // 有内容才登记：空目录进列表只会让人困惑。
-    if (r.produced > 0 && !store.kb.vaults.some((v) => resolve(String(v.path)) === resolve(dir))) {
-      store.kb.vaults.push({ path: dir, name: s.name, model: null, addedAt: now });
+    if (r.produced > 0) {
+      if (!existing) {
+        store.kb.vaults.push({
+          path: dir,
+          name: s.name,
+          model: null,
+          addedAt: now,
+          // 记下「这条是抓取自动登记的」，与用户手动的 'user' 区分开：
+          // 本地目录源的产物往往与源目录内容重叠，只有非 'user' 的才可能被自动排除。
+          origin: 'crawl',
+        });
+      } else if (existing.origin !== 'user') {
+        // 老数据（当时还没 origin 字段）补记来源。**绝不**改动 origin === 'user'
+        // 的记录——那是用户明确要的，把它降级成产物属于篡改用户意图。
+        existing.origin = 'crawl';
+      }
+    }
+
+    // 产物与它的**源目录**是不是同一批内容？（典型：本地目录源 = Obsidian vault，
+    // 而那个 vault 本身也是一个登记库）判据与 kb 域解析时用的是同一条：
+    // 源的 url 是不是一个登记库。这里只负责**识别并说出来**，
+    // 真正的排除发生在解析库列表那一刻（core/store.js 的 standbyVaults）——
+    // 采集域无权替检索域做决定，但有权把事实记准。
+    const srcPath = s.url ? resolve(String(s.url)) : null;
+    if (srcPath && srcPath !== productPath) {
+      const srcVault = store.kb.vaults.find((v) => resolve(String(v.path)) === srcPath);
+      const product = store.kb.vaults.find((v) => resolve(String(v.path)) === productPath);
+      // 用户显式 kb add 过的产物不算「被抑制」——它照样参与检索。
+      if (srcVault && product && product.origin !== 'user') {
+        overlapsWith = srcVault.name || srcPath;
+      }
     }
     return store.crawl.sources;
   });
+
+  // 本次清理掉的陈旧文件（远端已删 / 换引擎残留）——如实报出来，
+  // 否则用户只会看到 sources/ 目录悄悄变小而不知道原因。
+  const removed = r.removed || [];
+  const pruneNote = removed.length
+    ? `清理 ${removed.length} 个陈旧文件（远端已删或换引擎残留）：${removed.slice(0, 5).join('、')}` +
+      (removed.length > 5 ? ' 等' : '')
+    : null;
+
+  // 内容重叠（产物 ←→ 源目录都是登记库）必须当场说清：否则用户只会在检索时
+  // 发现「同一篇笔记出两条」，或者反过来「我登记的产物怎么没被索引」。
+  const overlapNote = overlapsWith
+    ? `产物与源库 [${overlapsWith}] 内容重叠，默认不参与检索` +
+      `（要索引它跑 ${APP_NAME} kb add "${dir}"；两者只要一个就够）`
+    : null;
 
   return {
     status: 'ok',
@@ -797,8 +929,12 @@ async function runOne(s, { rebuild, engine }) {
     changes: r.stats,
     failed: r.stats.failed,
     failures: r.failures.slice(0, 20),
-    note: r.note || null,
+    removedFiles: removed,
+    note: [r.note, pruneNote, overlapNote].filter(Boolean).join('；') || null,
     registered: true,
+    // 供面板/CLI 直接判断要不要标一个「未参与检索」的徽标
+    standby: !!overlapsWith,
+    overlapsWith,
     hint: `跑 ${APP_NAME} index --root "${dir}" 把抓到的内容加进索引`,
   };
 }
@@ -833,6 +969,7 @@ export async function run({ name, rebuild = false, engine } = {}) {
       added: results.reduce((n, r) => n + r.changes.added, 0),
       updated: results.reduce((n, r) => n + r.changes.updated, 0),
       unchanged: results.reduce((n, r) => n + r.changes.unchanged, 0),
+      removed: results.reduce((n, r) => n + (r.changes.removed || 0), 0),
       failed: results.reduce((n, r) => n + r.changes.failed, 0),
     },
   };

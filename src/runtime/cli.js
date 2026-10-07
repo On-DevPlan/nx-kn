@@ -30,19 +30,25 @@ const BUILTINS = [
   {
     id: 'help',
     cli: ['help'],
-    summary: '显示帮助（可跟模块名或命令组，如 nx-nx help repo',
+    summary: `显示帮助（可跟模块名或命令组，如 ${APP_NAME} help kb）`,
     args: [{ name: 'topic', required: false }],
     // 走标准 action 形态：--json 时 emit 会序列化返回的条目，
     // 于是 `help --json` 输出的是可解析的命令表而非帮助文本
     run: (ctx) => helpEntries(ctx.topic),
     render: (entries, ctx) => renderHelp(entries, ctx.topic),
   },
-  // render 让 `nx-nx version` 输出裸版本号（脚本里可 `V=$(nx-nx version)`），
+  // render 让 `nx-kn version` 输出裸版本号（脚本里可 `V=$(nx-kn version)`），
   // 而 `--json` 仍走序列化，保持机器可读
   { id: 'version', cli: ['version'], summary: '显示版本', run: () => VERSION, render: (v) => v },
 ];
 
 export const ALL_COMMANDS = [...BUILTINS, ...ACTIONS];
+
+// 标题行。APP_TITLE 与 APP_NAME 在生成的脚手架上可能是同一个值（两处占位符被填成一样），
+// 那时 `nx-kn · nx-kn v0.3.0` 只是把名字打了两遍——没有信息量，统一在这里去重。
+function appHead() {
+  return APP_TITLE && APP_TITLE !== APP_NAME ? `${APP_NAME} · ${APP_TITLE}` : APP_NAME;
+}
 
 // ---- 参数解析 ----
 
@@ -182,7 +188,7 @@ export function commandEntry(c) {
 
 // 解析帮助主题。既接受模块 id（repos），也接受命令组（repo）——
 // 用户脑子里想的是「repo 相关的东西」，不会去记内部模块名。
-// 这条路径不能报错退出：`nx-nx help <随便什么>` 失败会让最需要帮助的人卡住。
+// 这条路径不能报错退出：`nx-kn help <随便什么>` 失败会让最需要帮助的人卡住。
 function helpEntries(topic) {
   const all = ALL_COMMANDS.map(commandEntry);
   if (!topic) return all;
@@ -193,7 +199,7 @@ function helpEntries(topic) {
   const byRoot = all.filter((e) => e.command.split(' ')[1] === t);
   if (byRoot.length) return byRoot;
 
-  // 命令本身的 id 也认（如 `nx-nx help repo.add`）
+  // 命令本身的 id 也认（如 `nx-kn help home.health`）
   const byId = all.filter((e) => e.id === t);
   if (byId.length) return byId;
 
@@ -211,7 +217,7 @@ function helpEntries(topic) {
 function renderHelp(entries, topic) {
   const lines = [];
   if (!topic) {
-    lines.push(`${APP_NAME} · ${APP_TITLE} v${VERSION}`);
+    lines.push(`${appHead()} v${VERSION}`);
     lines.push(APP_DESC + '。CLI 与 Web 面板共享同一 action 声明。');
     lines.push(`存储: ${storePathFromEnv()}    （环境变量 ${STORE_ENV} 或 --store 覆盖）`);
     lines.push('');
@@ -238,7 +244,7 @@ function renderHelp(entries, topic) {
   return lines.join('\n');
 }
 
-// `nx-nx <命令> --help`：只打印这一条，而不是整个模块——
+// `nx-kn <命令> --help`：只打印这一条，而不是整个模块——
 // 之前这里传的是 cmd.cli[0]，对别名 action（cli 是数组的数组）会拼出 "bundled,list"。
 function printCommandHelp(cmd) {
   const lines = [usageOf(cmd)];
@@ -259,7 +265,7 @@ async function cmdServe(ctx) {
   const server = await startServer({ port, host: '127.0.0.1' });
   const addr = `http://127.0.0.1:${server.address().port}`;
 
-  console.log(APP_NAME + ' · ' + APP_TITLE + ' v' + VERSION);
+  console.log(appHead() + ' v' + VERSION);
   console.log(`面板:   ${addr}`);
   console.log(`存储:   ${storePathFromEnv()}`);
 

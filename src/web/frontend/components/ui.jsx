@@ -1,6 +1,7 @@
 // 通用 UI 件：toast、对话框、弹窗、错误边界、diff 渲染。
 // 约定延续自 vanilla 版：无 emoji、不用浏览器原生弹窗（alert/confirm/prompt 一律页内实现）。
 import { Component, createContext, useCallback, useContext, useEffect, useRef, useState } from 'react';
+import { splitHighlight } from '../highlight.js';
 
 // ---- toast：页内轻提示（自动消失） ----
 
@@ -43,6 +44,35 @@ export function useGuard() {
   return useCallback(async (fn) => {
     try { return await fn(); } catch (e) { toast(String((e && e.message) || e)); }
   }, [toast]);
+}
+
+// ---- 转圈：数据还没到时的占位 ----
+// 「还不知道」不等于「就是没有」。知识库状态要逐库起一次 `zg status` 子进程（秒级），
+// 冷启动时拿 `…` 顶着，用户会以为「它本来就长这样」；一个转圈明确表达「正在取」。
+// 样式在 style.css 的 base 层（跨风格共享，换风格也不该换掉「转动 = 正在加载」）。
+export function Spinner({ label }) {
+  return (
+    <span className="spinner-wrap" role="status">
+      <span className="spinner" aria-hidden="true" />
+      {label ? <span className="muted">{label}</span> : null}
+    </span>
+  );
+}
+
+// ---- 检索命中高亮 ----
+// 把问句里能字面匹配的词在文本中标黄——检索结果里最需要一眼看到的信息是
+// 「这段为什么被召回」，而这个理由就是「它含你问的那几个词」。
+// 切词与匹配是纯函数（web/frontend/highlight.js，有单测），这里只管渲染。
+//
+// 注意：语义（vector）召回本就可能一个字都不重合，那种片段不会有黄块——这是对的，
+// 不是坏了。面板在结果计数行里写明了「黄底 = 字面命中」。
+export function Highlight({ text, query }) {
+  const segs = splitHighlight(text, query);
+  return segs.map((s, i) =>
+    s.hit
+      ? <mark className="hl" key={i}>{s.text}</mark>
+      : <span key={i}>{s.text}</span>
+  );
 }
 
 // ---- 点击即复制：所有路径/长标识的展示标准 ----

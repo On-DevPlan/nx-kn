@@ -17,8 +17,8 @@ action 声明（`src/modules/*/index.js`），一条命令三端同源——CLI�
 需要时还能把 **vault 之外的文档站抓下来**：`crawl run` 抓取、清洗成 markdown、
 落成普通目录并**自动登记为知识库**，于是索引 / 检索 / 增量 / 多库合并全部复用 kb 域。
 抓取引擎二选一（`--engine`）：默认 `skill-seekers`（外部 Python 引擎，需本机
-Python 3.10+ 或 uv；抓取/分类能力更强，可选 LLM 增强）；`node` 为内置纯 Node 引擎
-（零外部依赖，离线可用）。
+Python 3.10+ 或 uv；抓取/分类能力更强，可选 LLM 增强——没装时会经 `uvx` 免安装拉起，
+**首次拉依赖很慢，见下方说明**）；`node` 为内置纯 Node 引擎（零外部依赖，离线可用）。
 
 索引也可以**自动跟上**：`nx-kn watch` 常驻监听各库，笔记一变就自动跑增量索引；
 `nx-kn serve` 起的面板里**默认已开**这道守护，面板上能看最近刷新、随手开关。
@@ -52,6 +52,20 @@ nx-kn index                                                     # 抓下来的�
 nx-kn query "怎么配置主题"                                       # 与本地 vault 一起被检索
 nx-kn crawl remove vitepress --purge                            # 不要了：连文件一起删
 ```
+
+> **默认抓取引擎的上手前提（很容易误判成「卡死」）**
+>
+> `skill-seekers` 是外部 Python 程序。nx-kn 按 `NX_KN_SKILL_SEEKERS_CMD` → `PATH`
+> → `uvx --from skill-seekers` 的顺序找它（见 `src/core/skill-seekers.js`）。
+> **`PATH` 上没有时会回退到 `uvx`，而 uvx 首次要在线拉一整套依赖**——本机实测
+> 二十分钟仍未装完（numpy / pymupdf / llama-index-core 等十几个包、数百 MB），
+> 期间终端没有任何输出，看起来就像卡住了，而它其实在下东西。三条出路，任选其一：
+>
+> 1. 装到本机：`pip install skill-seekers`（需 Python 3.10+）
+> 2. 指到已有的安装（推荐，尤其装在 venv 里时）：
+>    `NX_KN_SKILL_SEEKERS_CMD=C:\Users\<你>\.nx-kn\skill-seekers-venv\Scripts\skill-seekers.exe`
+>    （值也可以是 JSON 数组，如 `["uvx","--from","skill-seekers","skill-seekers"]`）
+> 3. 不用 Python：`--engine node`（内置纯 Node 引擎，只认静态 HTML，离线可用）
 
 把本地目录（如 Obsidian vault）整理入库——与文档站同一条流水线：
 

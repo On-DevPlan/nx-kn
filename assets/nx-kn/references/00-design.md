@@ -45,7 +45,7 @@
 
 | 情形 | 表达 | 例子 |
 | --- | --- | --- |
-| 调用方无从处理 | `throw`（AppError 带 code） | 参数非法、目标不存在 |
+| 调用方无从处理 | `throw`（`NxError` 带 code） | 参数非法、目标不存在 |
 | 调用方要做决策 | `return { status: 'ok'\|'skipped'\|'conflict'\|'blocked' }` | 冲突等用户选边、幂等跳过 |
 
 ## 错误案例
@@ -54,6 +54,7 @@
 | --- | --- | --- |
 | CLI 与 Web 各写一份命令清单 | 必然分叉，没人发现 | action 一处声明两端派生 |
 | 测试直接用默认存储路径 | 写脏用户数据 | 环境变量指向临时目录 |
-| 新模块忘了补 lint 禁列 | 静默变成「谁都能依赖」 | 否定式 glob（`['../*/**', '!../core/**']`），新增模块自动被覆盖 |
+| 新模块忘了补 lint 禁列 | 静默变成「谁都能依赖」 | 枚举式禁列 + 一致性测试（负模式对 `../` 实测失效，见 eslint.config.js） |
 | 把 Node 模块 import 进 view | vite 打包把 `node:` 拖进浏览器 | lint 规则 + 只 import view.jsx |
 | 声明了 `args:['id']` 但 http 路径没写 `:id` | 参数静默变 undefined | registry 自检（args 与路由占位符同名校验） |
+| `new Error()` 后手动赋 `err.code` | 赋了也不生效（`toErrorPayload` 只认 `NxError`），一律变 `INTERNAL`、HTTP 返 500 | 抛 `badInput()` / `notFound()` 这类构造器 |

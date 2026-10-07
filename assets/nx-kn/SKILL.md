@@ -172,15 +172,24 @@ CLI 与 Web 面板共享同一份 action 声明。需要时还能把**文档站�
 - 需要多用户 / 远程部署（这是本机单用户工具）
 - 需要 LLM 问答、摘要、改写（本工具只做召回）
 - 需要 wikilink / backlink 关系图谱（不在范围内）
-- 需要跨库**去重/合并同一篇笔记**：两个库若有目录嵌套，同一文件可能被两个索引各收一次
+- 需要跨库**去重/合并同一篇笔记**：唯一被自动处理的是「抓取产物 ←→ 它的源目录」这一种
+  （见「数据与存储」里的 `origin` / `standby`）；两库**互为父子目录**这类嵌套仍会各收一次
 - 需要抓**需要登录 / 验证码 / 靠 JS 渲染**的站点（采集只处理静态 HTML）
 - 需要开机自启 / 系统服务形态的守护（`nx-kn watch` 是前台进程，`serve` 的守护随面板进程存在）
 
 ## 数据与存储
 
 - 状态存 `~/.nx-kn/store.json`，原子写；环境变量 `NX_KN_STORE` 可覆盖路径
-- 知识库列表在 `kb.vaults[]`，每项是 `{ path, name, model, addedAt }`——
+- 知识库列表在 `kb.vaults[]`，每项是 `{ path, name, model, addedAt, origin }`——
   模型是**每库一个**（旧版的全局单值会在读取时自动迁移成列表）
+- `origin` 记的是这条记录谁写进来的：`"crawl"` = 抓取完成后自动登记，`"user"` = 手动
+  `kb add`，`null` = 历史数据未记录。**只有非 `"user"` 的库可能被「与源库重叠」规则排除**
+- **重叠规则**：`crawl run` 的产物目录若与它的**源目录**同时登记（典型是本地目录源 =
+  一个已登记的 Obsidian vault），产物默认**不参与检索**——否则同一篇笔记出两条命中、
+  各占一个 `--limit` 名额。判据是确定的谱系（产物目录 = `sources/<源名>`，源目录 = 源的
+  `url`），不靠内容相似度猜。被排除的库在 `kb list` 标 `【未参与检索】`、在 `query` 的
+  `skipped[]` 里单列（`standby: true`）、在 `status` 的 `totals.standby` 计数。
+  要启用它跑 `kb add <产物路径>`（一次即生效）；只想临时搜它用 `--root <产物路径>`
 - 采集源在 `crawl.sources[]`（与 `kb.vaults` **分列**）；抓下来的 markdown 落在
   `<数据目录>/sources/<源名>/**/*.md`，每页一个 `.md`（带 `source` / `title` / `fetchedAt` frontmatter）；
   增量清单是各源目录内的 `.nx-kn-crawl.json`（`url → { file, hash }`）

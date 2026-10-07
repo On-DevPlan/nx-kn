@@ -242,8 +242,9 @@ export async function listMarkdownFiles(dir) {
 /**
  * 可用性探测：**只在真要抓取时用**，不要放进任何读命令。
  *
- * 理由：uvx 这条路首次调用会联网拉约 50 MB 的依赖。`crawl list` 这种读命令
- * 若顺手探一下，用户会看到「只是列个表，怎么卡了两分钟」。
+ * 理由：uvx 这条路首次调用要在线拉一整套依赖（本机实测：numpy / pymupdf /
+ * llama-index-core 等十几个包，二十分钟仍未装完），期间无任何输出。`crawl list`
+ * 这种读命令若顺手探一下，用户会看到「只是列个表，怎么卡了这么久」。
  */
 export async function probeSkillSeekers({ env = process.env } = {}) {
   const r = await runSkillSeekers(['--help'], { timeoutMs: 120_000, env });

@@ -9,8 +9,8 @@
 // index / query / status 管「对全部库做一件事」（--root 可缩到单个库）。
 //
 // watch 是「守护」：两种形态共用一条 action 声明——
-//   CLI `nx-kn watch`       前台常驻，Ctrl+C 停（transport = cli 且没给 --on/--off）
-//   HTTP POST /api/kb/watch 开/关 serve 进程内的守护（面板开关）
+//   CLI `nx-kn watch`       前台常驻，Ctrl+C 停（`--off` 是「不要挂住终端」的显式出口）
+//   HTTP POST /api/kb/watch 开/关 serve 进程内的守护（面板开关，body {on: true|false}）
 // 之所以敢让一条 action 出两种行为：它们本来就是同一件事的两副面孔
 // （「把守护开起来」），靠 transport 区分，比硬拆成两条各自半份声明更不易漂移。
 // 另有一条 `kb.watchStatus`（读）单独报状态——轻量、不碰 zg，
@@ -102,9 +102,13 @@ export default {
       run: () => service.list(),
       render: (r) => {
         if (!r.count) return `还没有添加知识库目录 —— 跑 ${kbHint('kb add <vault路径>')}`;
-        const lines = [`共 ${r.count} 个知识库`, ''];
+        const nStandby = r.vaults.filter((v) => v.standby).length;
+        const lines = [
+          `共 ${r.count} 个知识库` + (nStandby ? `（其中 ${nStandby} 个默认不参与检索）` : ''),
+          '',
+        ];
         for (const v of r.vaults) {
-          lines.push(`[${v.name}] ${v.path}`);
+          lines.push(`[${v.name}] ${v.path}${v.standby ? '   【未参与检索】' : ''}`);
           const model = v.model
             ? v.model
             : v.plannedModel
@@ -116,6 +120,9 @@ export default {
               `  索引 ${v.missing ? '—' : indexLine(v)}` +
               `  模型 ${model}`
           );
+          // 为什么没参与、怎么让它参与——被排除的库必须自带解释，
+          // 否则这一行看起来和「登记丢了」没区别。
+          if (v.standby) lines.push(`    ${service.standbyNote(v)}`);
         }
         return lines.join('\n');
       },
@@ -152,6 +159,9 @@ export default {
           );
         }
         if (r.missing?.length) lines.push('', `跳过（目录不存在）: ${r.missing.join('、')}`);
+        // 被抑制的库如实列出：不列出来，用户看到的就是「我登记了它，索引却没碰」
+        // 而且找不到任何解释。
+        for (const v of r.standby || []) lines.push(`未参与: [${v.name}] ${v.note}`);
         return lines.join('\n');
       },
     },
@@ -170,7 +180,10 @@ export default {
       render: (r) => {
         if (r.needIndex) {
           const where = r.vaults?.length ? `\n已登记: ${r.vaults.map((v) => v.path).join('、')}` : '';
-          return `知识库${where}\n${r.hint}`;
+          const sup = r.suppressed?.length
+            ? `\n未参与: ${r.suppressed.map((v) => `[${v.name}] ${v.path}`).join('、')}（与源库重叠，要检索它跑 ${kbHint('kb add')}）`
+            : '';
+          return `知识库${where}${sup}\n${r.hint}`;
         }
         const multi = (r.searched?.length || 0) > 1;
         if (!r.hits.length) {
@@ -195,7 +208,12 @@ export default {
         ];
         lines.push('', '  ' + meta.join(' · '));
         if (r.skipped?.length) {
-          lines.push('  ' + r.skipped.map((s) => `跳过 [${s.name}] ${s.reason}`).join(' · '));
+          // 「出错跳过」与「被规则排除」分开印：前者要人去看日志，
+          // 后者只要一次 kb add。混成一行，用户会去排查一个并不存在的故障。
+          const soft = r.skipped.filter((s) => s.standby);
+          const hard = r.skipped.filter((s) => !s.standby);
+          if (hard.length) lines.push('  ' + hard.map((s) => `跳过 [${s.name}] ${s.reason}`).join(' · '));
+          for (const s of soft) lines.push(`  未参与 [${s.name}] ${s.reason}`);
         }
         return lines.join('\n');
       },
@@ -216,10 +234,10 @@ export default {
           if (r.hint) lines.push(`          ${r.hint}`);
           return lines.join('\n');
         }
-        lines.push(`知识库    ${r.totals.vaults} 个（索引 ${r.totals.indexed} 个${r.totals.stale ? ` · 待更新 ${r.totals.stale} 个` : ''} · 共 ${r.totals.notes} 篇可索引 md）`);
+        lines.push(`知识库    ${r.totals.vaults} 个（索引 ${r.totals.indexed} 个${r.totals.stale ? ` · 待更新 ${r.totals.stale} 个` : ''} · 共 ${r.totals.notes} 篇可索引 md）${r.totals.standby ? `　另有 ${r.totals.standby} 个未参与检索` : ''}`);
         lines.push('');
         for (const v of r.vaults) {
-          lines.push(`[${v.name}] ${v.path}`);
+          lines.push(`[${v.name}] ${v.path}${v.standby ? '   【未参与检索】' : ''}`);
           if (v.missing) {
             lines.push('    目录不存在');
             continue;
@@ -239,24 +257,40 @@ export default {
       cli: [['watch'], ['kb', 'watch']],
       http: ['POST', '/api/kb/watch'],
       summary:
-        '守护：监听已登记库，笔记一变就自动增量索引（CLI 前台常驻、Ctrl+C 停；--on/--off 或面板则开关 serve 内的守护）',
+        '守护：监听已登记库，笔记一变就自动增量索引（CLI 前台常驻、Ctrl+C 停；面板上的开关控制的是 serve 进程内的守护）',
       flags: {
         on: { type: 'boolean' },
+        off: { type: 'boolean' },
         debounce: { type: 'number', hint: '毫秒' },
       },
       run: (ctx, meta) => {
-        const http = meta?.transport === 'http';
-        // CLI 不给 --on/--off = 前台常驻；给了，或走 HTTP = 开关。
-        // 判据是「有没有表达开关意图」，而不是「是不是 HTTP」——
-        // 这样 `nx-kn watch --off` 也能在脚本里按意图表达，不至于莫名其妙挂住终端。
-        if (http || ctx.on !== undefined) {
+        // HTTP：面板开关。`{on:false}` 停、其余起（起是幂等的）。
+        if (meta?.transport === 'http') {
           return ctx.on === false
             ? Promise.resolve(watch.stopWatch())
-            : watch.startWatch({ debounceMs: ctx.debounce, source: http ? 'serve' : 'cli' });
+            : watch.startWatch({ debounceMs: ctx.debounce, source: 'serve' });
         }
+
+        // CLI `--off`：显式表达「我不要守护」。
+        // CLI 侧本来就没有可关的常驻守护（守护活在 serve 进程里，随 serve 一起退出），
+        // 所以这是一次**幂等的空操作**——立刻返回并说清真正的关闭方式，
+        // 而不是像以前那样因为它没被声明而报「未知参数 --off」。
+        if (ctx.off) return Promise.resolve({ ...watch.watchState(), cliNoop: true });
+
+        // CLI 其余情况（含 `--on`）：前台常驻。
+        // `--on` 与不给 flag 等价，但保留它让 `--on/--off` 成对好记；
+        // 走 runWatchForeground 而不是 startWatch，是为了让守护**打印启动信息**——
+        // 以前 `--on` 走的是 startWatch，于是它静默常驻，用户看不到任何反馈。
         return watch.runWatchForeground({ debounceMs: ctx.debounce });
       },
       render: (r) => {
+        if (r.cliNoop) {
+          return [
+            `CLI 侧没有常驻守护可关 —— 守护活在 ${kbHint('serve')} 的进程里，随 serve 一起退出。`,
+            `  停前台守护：在跑着 ${kbHint('watch')} 的那个终端按 Ctrl+C`,
+            `  停 serve 内的守护：面板上的「守护」开关，或 POST /api/kb/watch {"on":false}`,
+          ].join('\n');
+        }
         if (!r.running) {
           return `守护已停止 —— 笔记改动不再自动进索引，需要手动跑 ${kbHint('index')}`;
         }

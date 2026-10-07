@@ -9,6 +9,7 @@ import * as fsp from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { assertSafeName } from '../core/paths.js';
 import { APP_NAME } from '../core/paths.js';
+import { badInput, notFound } from '../core/errors/index.js';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -42,9 +43,7 @@ export async function installBundledSkill({ name = SKILL_NAME, to, force } = {})
   const src = join(ASSETS_DIR, name);
   if (!existsSync(join(src, 'SKILL.md'))) {
     const available = (await bundledSkillNames()).join(', ');
-    const err = new Error(`未找到内置 skill: ${name}（可用: ${available || '(assets/ 下无 skill)'}）`);
-    err.code = 'NOT_FOUND';
-    throw err;
+    throw notFound(`未找到内置 skill: ${name}（可用: ${available || '(assets/ 下无 skill)'}）`);
   }
   const dst = join(to || DEFAULT_SKILLS_DIR, name);
   const files = await diffTrees(src, dst);
@@ -73,30 +72,22 @@ export async function getSkill({ name = SKILL_NAME, ref = '', to, force } = {}) 
     rel = (await exists(a)) ? join('references', `${ref}.md`) : (await exists(b)) ? `${ref}.md` : null;
     if (!rel) {
       const refs = await listRefs(name);
-      const err = new Error(`未知 ref: ${ref}（可用: SKILL.md, ${refs.join(', ')}）`);
-      err.code = 'INVALID_INPUT';
-      throw err;
+      throw badInput(`未知 ref: ${ref}（可用: SKILL.md, ${refs.join(', ')}）`);
     }
   }
   if (rel.includes('..')) {
-    const err = new Error(`ref 路径不允许包含 '..': ${ref}`);
-    err.code = 'INVALID_INPUT';
-    throw err;
+    throw badInput(`ref 路径不允许包含 '..': ${ref}`);
   }
   const file = join(ASSETS_DIR, name, rel);
   const outside = !join(file).startsWith(join(ASSETS_DIR, name));
   if (outside) {
-    const err = new Error(`ref 越界: ${ref}`);
-    err.code = 'INVALID_INPUT';
-    throw err;
+    throw badInput(`ref 越界: ${ref}`);
   }
   let content;
   try {
     content = await fsp.readFile(file, 'utf8');
   } catch {
-    const err = new Error(`未找到 skill 文档: ${name}/${rel}`);
-    err.code = 'NOT_FOUND';
-    throw err;
+    throw notFound(`未找到 skill 文档: ${name}/${rel}`);
   }
   const install = await installBundledSkill({ name, to, force });
   return { skillName: name, ref: rel, content, contentBytes: Buffer.byteLength(content, 'utf8'), install };

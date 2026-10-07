@@ -8,8 +8,14 @@
 // - 进程内缓存 + mtime 失效检测：外部进程（如 CLI）改写后，Web 服务侧能立刻看到
 // - 自己写入后主动刷新缓存 mtime，避免「自己触发自己重读」
 import fsp from 'node:fs/promises';
-import { dirname } from 'node:path';
-import { CRAWL_ENGINES, DEFAULT_CRAWL_ENGINE, storePathFromEnv } from './paths.js';
+import { dirname, resolve } from 'node:path';
+import {
+  APP_NAME,
+  CRAWL_ENGINES,
+  DEFAULT_CRAWL_ENGINE,
+  sourceDirOf,
+  storePathFromEnv,
+} from './paths.js';
 
 // 项目自己的初始结构。改这里即可扩展存储，老数据由 normalize 自动补齐。
 export function initialState() {
@@ -36,25 +42,92 @@ export function initialState() {
 let cache = null;
 let cacheMtime = -1;
 
+// 最近一次「读时发现 store 损坏并被隔离」的记录。null = 本次进程没发生过。
+// 导出给 home.health 这类自检命令用——静默修复等于没修，得让用户看得见。
+let lastRecovery = null;
+
+export function storeRecovery() {
+  return lastRecovery;
+}
+
 export function newId(prefix) {
   return prefix + '_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
 }
 
+// 把坏掉的 store 挪成带时间戳的备份，返回备份路径。
+// 用 rename 而不是复制：坏文件留在原处的话，下次读又会走一遍这个分支。
+async function quarantine(p) {
+  const stamp = new Date().toISOString().replace(/[-:]/g, '').replace(/\.\d+Z$/, 'Z');
+  const backup = `${p}.corrupt-${stamp}`;
+  try {
+    await fsp.rename(p, backup);
+    return backup;
+  } catch {
+    // rename 失败（被占用 / 跨设备）：退回复制，至少把内容留下来
+    try {
+      await fsp.copyFile(p, backup);
+      return backup;
+    } catch {
+      return '(备份失败——请立刻手动复制这个文件)';
+    }
+  }
+}
+
 export async function loadStore(explicitPath) {
   const p = explicitPath || storePathFromEnv();
+
+  // ① 文件不存在 —— **只有这一种情况**才是「首次运行」。
+  let st;
   try {
-    const st = await fsp.stat(p);
-    if (cache && cacheMtime === st.mtimeMs) return cache;
-    const raw = await fsp.readFile(p, 'utf8');
-    cache = normalize(JSON.parse(raw));
-    cacheMtime = st.mtimeMs;
-    return cache;
+    st = await fsp.stat(p);
   } catch {
-    // 文件不存在或损坏：返回空结构（首次运行 / 允许外部修复后恢复）
     cache = normalize(null);
     cacheMtime = -1;
     return cache;
   }
+
+  if (cache && cacheMtime === st.mtimeMs) return cache;
+
+  // ② 存在但读不动（权限 / 被占用）：**不能**当成空结构，否则下一次写入会盖掉它。
+  let raw;
+  try {
+    raw = await fsp.readFile(p, 'utf8');
+  } catch (err) {
+    throw new Error(`存储文件读不出来: ${p}（${(err && err.code) || (err && err.message) || err}）`);
+  }
+
+  // ③ 内容不是合法 JSON —— 与 ① 是两件事，绝不能共用一个分支。
+  // 当成空结构继续的话，下一次 `kb add` / `settings set` 的原子写会**把原文件覆盖掉**，
+  // 全程零报错。本机真实发生过（当时靠人工备份 store.json.bak-20261004 才救回来）。
+  // 处置：先把原文件留成可恢复的备份，再按空结构继续——既不静默破坏数据，也不把用户卡死。
+  let parsed;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (err) {
+    const backup = await quarantine(p);
+    lastRecovery = {
+      path: p,
+      backup,
+      at: new Date().toISOString(),
+      reason: String((err && err.message) || err),
+    };
+    // core 一般不该往控制台写字，但「数据被隔离」属于必须当场可见的事件：
+    // 它既不是调用方能处理的失败（那该 throw），也不该悄悄过去。
+    console.error(
+      '[nx-kn] 存储文件不是合法 JSON，已留备份并按空结构继续：\n' +
+        `  原文件 ${p}\n` +
+        `  备份   ${backup}\n` +
+        `  原因   ${lastRecovery.reason}\n` +
+        `  要恢复：确认备份内容无误后，把它改回上面的原文件路径（${APP_NAME} health 也会报这一条）。`
+    );
+    cache = normalize(null);
+    cacheMtime = -1;
+    return cache;
+  }
+
+  cache = normalize(parsed);
+  cacheMtime = st.mtimeMs;
+  return cache;
 }
 
 export async function saveStore(next, explicitPath) {
@@ -154,6 +227,14 @@ export function normalizeKb(raw) {
 
 // 单条 vault 记录：只认 path 必填，其余字段缺了给安全默认。
 // name 只是**显示用**的短名（面板与结果里标注来源库），不参与任何路径拼接。
+//
+// origin 记的是「这条记录是谁写进来的」，是三态而不是布尔：
+//   'crawl'  抓取完成后自动登记（产物目录，内容可能与它的源目录重复）
+//   'user'   用户显式添加（kb add / 面板「添加目录」）
+//   null     历史数据，当时还没有这个字段
+// 为什么必须区分 null 与 'user'：'user' 是「我确认要它」的明确表达，
+// 一旦是它就必须**永不**被自动规则排除；而 null 只是「没记录」，
+// 允许由 crawlProductVaults() 的谱系推导兜底。把两者并成一个 false 就分不出来了。
 function normalizeVault(v) {
   const path = typeof v === 'string' ? v : v && v.path;
   if (typeof path !== 'string' || !path.trim()) return null;
@@ -163,6 +244,7 @@ function normalizeVault(v) {
     name: obj.name ? String(obj.name) : displayNameOf(String(path)),
     model: obj.model ? String(obj.model) : null,
     addedAt: obj.addedAt ? String(obj.addedAt) : null,
+    origin: obj.origin === 'crawl' || obj.origin === 'user' ? obj.origin : null,
   };
 }
 
@@ -226,8 +308,64 @@ export function normalizeCrawl(raw) {
   return out;
 }
 
-// 测试与调试用：清掉进程内缓存，强制下次重读
+// ---- 库之间的谱系：抓取产物 ←→ 它的源目录 ----
+//
+// 为什么需要这条判据：`crawl run` 会把产物目录**自动登记为知识库**，而本地目录源
+// （kind: 'local'，典型是 Obsidian vault）的源目录本身往往也是一个登记库。
+// 于是同一批笔记在列表里出现两份，检索时各给一条命中、各占一个 --limit 名额——
+// 而 nx-kn 是「逐库召回再按融合分合并」，没有跨库去重这一步。
+//
+// 为什么不用内容相似度去重：两份内容**并不相同**（产物被加了 source/engine/fetchedAt
+// 头部、目录结构也被重排过），哈希与路径都对不上，只剩标题可猜。猜错了
+// 把两篇真不同的笔记当成同一篇吞掉一条命中，比不去重更糟。
+//
+// 而谱系是**已知的**、不需要猜：产物目录 = sourceDirOf(源名)，源目录 = 源的 url。
+// 两条都是我们自己写下的值。判据因此是完全确定的。
+//
+// 刻意**只**在「源目录也是一个登记库」时成立：
+//   - web 源（url 是 https://…）没有对应的本地库，产物就是唯一副本，绝不能收起来；
+//   - 本地目录源但用户从未 kb add 过那个目录，同理——收起来等于内容凭空消失。
+// 只收「确实重复」的那一类，是这条规则唯一的安全边界。
+//
+// 路径比较沿用本仓既有约定（resolve 后严格相等），不额外做大小写折叠：
+// 同一份代码里出现第二套路径比较规则，是比大小写更难查的问题。
+export function crawlProductVaults(store) {
+  const vaults = (store && store.kb && store.kb.vaults) || [];
+  const sources = (store && store.crawl && store.crawl.sources) || [];
+  const known = new Set(vaults.map((v) => resolve(String(v.path))));
+
+  const out = new Map(); // 产物库路径 → 源库路径
+  for (const s of sources) {
+    if (!s || !s.name || !s.url) continue;
+    const product = resolve(sourceDirOf(s.name));
+    if (!known.has(product)) continue; // 产物没登记：无所谓
+    const src = resolve(String(s.url));
+    if (src === product) continue; // 源就是产物（病态数据），不构成「两份」
+    if (!known.has(src)) continue; // 源目录不是登记库：产物是唯一副本，不能收
+    out.set(product, src);
+  }
+  return out;
+}
+
+// 「默认不参与检索」的库 → 原因是哪个源库。
+//
+// 只有 origin !== 'user' 的才可能被收起来：用户显式 kb add 过的记录，
+// 无论它长得多像某个源的产物，都按「我确认要它」处理，永不自动排除。
+// 这也正是 kb add 能当「启用」用的原因——不需要再造一个 kb standby 命令。
+export function standbyVaults(store) {
+  const lineage = crawlProductVaults(store);
+  const out = new Map();
+  for (const v of (store && store.kb && store.kb.vaults) || []) {
+    if (v.origin === 'user') continue;
+    const key = resolve(String(v.path));
+    if (lineage.has(key)) out.set(key, lineage.get(key));
+  }
+  return out;
+}
+
+// 测试与调试用：清掉进程内状态（缓存 + 上一次的隔离记录），强制下次重读
 export function clearCache() {
   cache = null;
   cacheMtime = -1;
+  lastRecovery = null;
 }

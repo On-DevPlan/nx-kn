@@ -60,6 +60,48 @@
 - 面板状态卡：**`st === null` 是「还不知道」，不是「没有」**。`/api/kb/status` 冷启动
   要 5–6.5s，期间必须显示 `…`，不能渲「未设定 / zg 未安装 / 未建」。
 
+## 库之间的谱系：抓取产物 ←→ 源目录（F8，已落地）
+
+- `crawl run` 会把产物目录**自动登记为知识库**，而**本地目录源**（`kind: 'local'`，典型是
+  Obsidian vault）的源目录本身往往也是登记库 → 同一批笔记两份登记、各占 `--limit` 名额。
+  **唯一被自动处理的重复就是这一种**；两库互为父子目录之类的嵌套仍不处理。
+- 判据是**确定的谱系**，不是内容相似度（产物是重排过的版本 + 加了 frontmatter，路径与哈希都对不上）：
+  产物目录 = `sourceDirOf(源名)`，源目录 = 源的 `url`。实现：`core/store.js` 的
+  `crawlProductVaults()` / `standbyVaults()`。
+- `kb.vaults[]` 的 `origin` 是**三态**：`'crawl'` / `'user'` / `null`（历史数据）。
+  只有 `origin !== 'user'` 才可能被抑制；`kb add <路径>` 一次即「我确认要它」——
+  这是启用被排除库的**唯一**入口（刻意**不**新增 `kb standby`：同一件事两个入口迟早只改一边）。
+- `resolveVaults()` 返回 `{ vaults, standby, source }` 而不是一个大数组加标志位——
+  调用方必须自己选（合成一个数组，将来某个调用方漏看标志位就会静默把重复算进去）。
+  调用方全集：index / query / status / watch。
+- **安全边界（唯一）**：只在「源目录也是登记库」时抑制。web 源、源目录未登记的本地源都不抑制
+  ——收起来等于内容凭空消失。判宽和判严都是**静默**的，所以 `tests/unit/vault-lineage.test.mjs`
+  + 流水线 P19 逐条钉住。
+- 呈现必须说清「为什么没参与 + 怎么参与」：`kb list` 标 `【未参与检索】`、`query` 的
+  `skipped[]` 里 `standby: true` 单列、`status` 的 `totals.standby`（**totals 其余口径只算参与的库**）。
+- `kb remove` 掉**产物**库**不持久**（自动登记条件是 `produced > 0 && 未登记`，下次 pipeline 加回来）；
+  删源库才稳定。
+
+## 已修的审查问题（2026-10-08，F1–F10 全部，勿再引用旧结论）
+
+- 判据：凡 `new Error(...)` 后手赋 `err.code` **一律无效**（`toErrorPayload` 只认 `instanceof NxError`），
+  必须用 `badInput()` / `notFound()`。`tests/unit/errors.test.mjs` 已钉成回归闸门。
+- `CliHints` 按 **action id** 查命令表（不是传命令字符串）；id 查不到时 `console.warn`，
+  不再静默 `return null`——「静默失效」是这套代码库最需要防的失效模式。
+- `store.json` 解析失败先改名 `store.json.corrupt-<时间戳>` 再继续（只有 `ENOENT` 算首次运行）；
+  `health` 会**真的读一次** store。
+- 采集陈旧产物清理：只清「上次 manifest 记录过、本次未产出」的 `.md`，且只在 `produced > 0` 时清理。
+  **坑**：`next` 是从上次 manifest 继承的，拿它当保留集合 = 什么都没删。
+
+## 测试约定
+
+- `tests/pipeline.mjs` 是「一个外层测试 + 25 个内层子测试」的嵌套结构。**`node --test --test-name-pattern`
+  对嵌套子测试是假绿**：它按文件名过滤，报 `1..0 / 0 subtests / exit 0`，实际一条没跑。
+  → 要跑 pipeline 就整文件跑（`pnpm run test:pipeline`），别用 name-pattern 图快。
+- 快检 = `pnpm test`（lint → build → smoke → unit）；集成另跑 `test:pipeline`（约 8–12 分钟）。
+- **测试里建了索引才算数**：被 `resolveVaults` 排除的库不会进 `index`，所以「`kb add` 之后应该能搜到」
+  这类断言必须自己补一步 `index`，否则失败信息会误导成「规则没生效」。
+
 ## 当前状态
 
 vault 暂指向 `D:\DevProjects\my\github\nx-kn-smoke`（3 篇中文笔记 + 已建索引，可作回归样例）；

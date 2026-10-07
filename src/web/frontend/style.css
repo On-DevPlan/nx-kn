@@ -33,6 +33,18 @@ body {
 .bad { color: var(--bad); }
 .nowrap { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
+/* --- 检索命中高亮 ---
+   黄底 = 问句里的词在正文里**字面出现**的位置（切词逻辑在 web/frontend/highlight.js，
+   组件是 components/ui.jsx 的 <Highlight>）。放 base 层而不是某个 style 策略里：
+   它在片段、标题等任何位置的读法都该一致，换风格也不该换掉「黄=命中」。
+   用 <mark> 而非自定义 class 只是为了保留语义——样式仍由这里定，不吃 UA 默认值。 */
+mark.hl {
+  background: var(--hl-bg);
+  color: var(--hl-ink);
+  padding: 0 1px;
+  border-radius: 2px;
+}
+
 /* --- 表单 --- */
 input, select {
   height: var(--row-h);
@@ -62,6 +74,30 @@ input::placeholder { color: var(--mid); }
 /* --- 空态 --- */
 .empty { color: var(--mid); padding: 18px 12px; }
 .empty code { background: var(--soft); padding: 1px 5px; border-radius: 4px; }
+
+/* --- 转圈（数据未到达时的占位）---
+   组件是 components/ui.jsx 的 <Spinner>。环用 --soft-2 打底、缺口用 --mid，
+   在纸面上是「灰环转」而不是任何彩色——加载态不该抢注意力。 */
+.spinner-wrap { display: inline-flex; align-items: center; gap: 6px; }
+.spinner {
+  width: 13px;
+  height: 13px;
+  flex: none;
+  border: 2px solid var(--soft-2);
+  border-top-color: var(--mid);
+  border-radius: 50%;
+  animation: nx-spin 0.7s linear infinite;
+}
+@keyframes nx-spin { to { transform: rotate(360deg); } }
+/* 减动效偏好下不能只是「关掉动画」——一个静止的缺口圆环看起来像坏掉的图标。
+   换成整体呼吸（透明度），既保留「它在动」的信息，又不产生旋转眩晕。 */
+@media (prefers-reduced-motion: reduce) {
+  .spinner {
+    animation: nx-pulse 1.2s ease-in-out infinite;
+    border-top-color: var(--soft-2);
+  }
+}
+@keyframes nx-pulse { 50% { opacity: 0.3; } }
 
 /* --- 可复制文本 --- */
 .copyable { cursor: copy; }

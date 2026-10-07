@@ -7,7 +7,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { api } from '../../web/frontend/api/client.js';
 import { CliHints } from '../../web/frontend/components/CliHints.jsx';
 import { useStore } from '../../web/frontend/store.jsx';
-import { useToast } from '../../web/frontend/components/ui.jsx';
+import { Spinner, useToast } from '../../web/frontend/components/ui.jsx';
 
 // 抓取（外部引擎可能要拉依赖）+ 索引（全库嵌入）都是慢操作，给 30 分钟上限。
 const PIPELINE_TIMEOUT = 1_800_000;
@@ -115,7 +115,7 @@ function PipelineOverview() {
         title="抓取采集源"
         status={
           <>
-            <span className="tag">{loading ? '…' : `${crawl.count} 个源`}</span>
+            {loading ? <Spinner /> : <span className="tag">{crawl.count} 个源</span>}
             <a
               className="tag"
               href="#/kb"
@@ -141,9 +141,13 @@ function PipelineOverview() {
         title="更新索引"
         status={
           <>
-            <span className="tag">
-              {loading ? '…' : totals ? `${totals.vaults} 个库${totals.stale ? ` · 待更新 ${totals.stale}` : ''}` : ''}
-            </span>
+            {loading ? (
+              <Spinner />
+            ) : (
+              <span className="tag">
+                {totals ? `${totals.vaults} 个库${totals.stale ? ` · 待更新 ${totals.stale}` : ''}` : ''}
+              </span>
+            )}
             <a
               className="tag"
               href="#/kb"
@@ -174,7 +178,7 @@ function PipelineOverview() {
           {busy ? '流水线运行中…' : '一键跑流水线（抓取 → 索引）'}
         </button>
       </div>
-      <CliHints command="nx-kn pipeline" note="两步串联、各自增量；没有源/库的步骤自动跳过" />
+      <CliHints id="home.pipeline" note="两步串联、各自增量；没有源/库的步骤自动跳过" />
     </div>
   );
 }
@@ -221,7 +225,7 @@ export default function HomeView() {
       <div className="card">
         <div className="colhead">
           <span>CLI 命令与 HTTP 路由（同源）</span>
-          <span className="tag">{routes ? routes.count : '…'} 条</span>
+          {routes ? <span className="tag">{routes.count} 条</span> : <Spinner />}
         </div>
         {(routes?.routes || []).map((r) => (
           <div key={r.id} className="row">
@@ -233,7 +237,7 @@ export default function HomeView() {
           </div>
         ))}
         {routes && !routes.routes.length && <div className="empty">暂无命令</div>}
-        <CliHints command="nx-kn routes" note="这两张表由同一份 action 声明派生" />
+        <CliHints id="home.routes" note="这两张表由同一份 action 声明派生" />
       </div>
     </div>
   );

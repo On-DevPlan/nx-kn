@@ -23,7 +23,7 @@ export const CODES = {
   NOT_FOUND: 'NOT_FOUND', // 目标不存在
   CONFLICT: 'CONFLICT', // 状态冲突，需调用方决策
   BLOCKED: 'BLOCKED', // 业务规则主动阻止
-  EXTERNAL: 'EXTERNAL', // 外部命令（git / gh）失败
+  EXTERNAL: 'EXTERNAL', // 外部命令（zg / skill-seekers）失败
   SPEC_ERROR: 'SPEC_ERROR', // action 声明本身有误（写错了，不是用户输入错）
   INTERNAL: 'INTERNAL', // 兜底
 };

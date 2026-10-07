@@ -3,7 +3,7 @@
 import { Suspense, useEffect } from 'react';
 import { VIEWS } from './registry.js';
 import { useStore } from './store.jsx';
-import { ErrorBoundary } from './components/ui.jsx';
+import { ErrorBoundary, Spinner } from './components/ui.jsx';
 
 function viewFromHash() {
   const h = location.hash.replace(/^#\/?/, '');
@@ -53,23 +53,25 @@ export default function App() {
           {appName}
           <span className="sub">Obsidian 知识库检索（zg 引擎）</span>
         </div>
+        {/* 导航与品牌同排（原先它在 header 下面单独一行）：一行头部省掉约 35px，
+            而 tab 只有三个。CSS 见 layout.css 的 header / .tabbar。 */}
+        {views.length > 0 && (
+          <div className="tabbar">
+            <nav>
+              {views.map((v) => (
+                <button
+                  key={v.id}
+                  className={'tab' + (current && current.id === v.id ? ' active' : '')}
+                  onClick={() => patchUi({ view: v.id })}
+                >
+                  {v.title}
+                </button>
+              ))}
+            </nav>
+          </div>
+        )}
         <div className="meta">{boot ? `v${boot.app.version}` : ''}</div>
       </header>
-      {views.length > 0 && (
-        <div className="tabbar">
-          <nav>
-            {views.map((v) => (
-              <button
-                key={v.id}
-                className={'tab' + (current && current.id === v.id ? ' active' : '')}
-                onClick={() => patchUi({ view: v.id })}
-              >
-                {v.title}
-              </button>
-            ))}
-          </nav>
-        </div>
-      )}
       <main>
         {!current ? (
           <div className="empty">
@@ -83,7 +85,7 @@ export default function App() {
           </div>
         ) : (
           <ErrorBoundary key={current.id}>
-            <Suspense fallback={<div className="muted" style={{ padding: 24 }}>加载中…</div>}>
+            <Suspense fallback={<div style={{ padding: 24 }}><Spinner label="加载中…" /></div>}>
               <section className="panel active">
                 <current.component />
               </section>

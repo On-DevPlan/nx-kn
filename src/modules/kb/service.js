@@ -18,7 +18,7 @@ import { existsSync } from 'node:fs';
 import fsp from 'node:fs/promises';
 import { basename, resolve, join } from 'node:path';
 import { badInput, external, notFound } from '../../core/errors/index.js';
-import { loadStore, mutateStore } from '../../core/store.js';
+import { loadStore, mutateStore, standbyVaults } from '../../core/store.js';
 import {
   APP_NAME,
   VAULT_ENV,
@@ -62,6 +62,17 @@ export async function storedVaults() {
   return (store.kb && store.kb.vaults) || [];
 }
 
+// 被抑制的统一说法。CLI 渲染、面板、query 的 skipped[] 全用它——
+// 三处各写一版文案，迟早会漂移成「同一个状态三种解释」。
+// 一定要说清两件事：**为什么**没参与（与哪个库重叠）、**怎么**让它参与（一条 kb add）。
+export function standbyNote(v, appName = APP_NAME) {
+  const src = v && v.standbyBecause ? basename(String(v.standbyBecause)) : '源库';
+  return (
+    `与源库 [${src}] 内容重叠（抓取产物），默认不参与检索` +
+    `——要用它跑 ${appName} kb add "${v.path}"`
+  );
+}
+
 // ---- 目标解析：--root / 环境变量（单库）> store 列表（多库）----
 //
 // 两层语义刻意不同：
@@ -69,29 +80,56 @@ export async function storedVaults() {
 //   store 列表        = 「我的知识库们」（长期，默认全都要）
 // 所以前者不做存在性兜底（指错了直接报错更省事），后者对缺失目录**只标记不抛**——
 // 多库里有一个被删/被移走是常态，抛错会让另外几个库一起不可用。
+//
+// 返回值里 vaults 与 standby 是**分开**的两组，而不是一个大数组加个标志位：
+// 调用方必须自己选一个（index/query 用 vaults，status 两个都要）。
+// 合成一个数组的话，将来某个调用方漏看标志位就会静默把重复内容也算进去——
+// 那正是这套机制要消灭的东西。
+//   vaults  本次参与检索/索引的库
+//   standby 登记了但默认不参与的库（抓取产物，与其源库内容重叠），带原因
 export async function resolveVaults({ root } = {}) {
   const fromFlag = root ? resolve(String(root)) : null;
   const fromEnv = fromFlag ? null : vaultPathFromEnv();
 
+  // --root / 环境变量是**显式指定**：谈不上「与另一个库重复」，
+  // 所以不参与抑制判定。这本身就是那个逃生舱——想临时只搜产物库，
+  // 直接 `query "…" --root <产物路径>` 即可，不必先把它 kb add 一遍。
   if (fromFlag || fromEnv) {
     const dir = fromFlag || resolve(String(fromEnv));
     await assertDir(dir);
-    return { vaults: [{ path: dir, name: basename(dir), model: null, missing: false }], source: fromFlag ? 'flag' : 'env' };
+    return {
+      vaults: [{ path: dir, name: basename(dir), model: null, missing: false, standby: false }],
+      standby: [],
+      source: fromFlag ? 'flag' : 'env',
+    };
   }
 
-  const stored = await storedVaults();
+  const store = await loadStore();
+  const stored = (store.kb && store.kb.vaults) || [];
   if (!stored.length) {
     throw badInput(
       `还没有添加知识库目录。先跑 ${APP_NAME} kb add <vault路径>（临时用可设环境变量 ${VAULT_ENV}，或用 --root 指定）`
     );
   }
 
+  const suppressed = standbyVaults(store);
+
   const vaults = [];
+  const standby = [];
   for (const rec of stored) {
     const dir = resolve(String(rec.path));
-    vaults.push({ ...rec, path: dir, missing: !(await isDir(dir)) });
+    const because = suppressed.get(dir) || null;
+    const row = {
+      ...rec,
+      path: dir,
+      missing: !(await isDir(dir)),
+      standby: !!because,
+      // 原因必须一路带着走到 CLI 与面板：说不清理由的排除，用户只会读成「东西丢了」。
+      standbyBecause: because,
+    };
+    (because ? standby : vaults).push(row);
   }
-  return { vaults, source: 'store' };
+  return { vaults, standby, source: 'store' };
 }
 
 // ---- 只读探测：数笔记、认 Obsidian ----
@@ -195,9 +233,17 @@ export async function add({ path, model } = {}) {
         name: basename(dir),
         model: want,
         addedAt: new Date().toISOString(),
+        // 手动添加 = 用户明确要它。抓取自动登记写的是 'crawl'，两者待遇不同
+        // （见 core/store.js 的 standbyVaults）：只有非 'user' 的才可能被自动规则排除。
+        origin: 'user',
       });
-    } else if (want) {
-      rec.model = want; // 显式给了就更新：用户在纠正之前填错的模型
+    } else {
+      // 对一条已存在的记录再 kb add 一遍，语义是「我确认要它」：
+      // 把 origin 提成 'user'，它就不再被「与源库重叠」那条规则收起来。
+      // **这就是「启用一个被抓取产物占用名额的库」的全部实现**——
+      // 复用一条已有命令，而不是再造一个并行的 kb standby / kb enable。
+      rec.origin = 'user';
+      if (want) rec.model = want; // 显式给了就更新：用户在纠正之前填错的模型
     }
     return store.kb.vaults;
   });
@@ -243,13 +289,26 @@ export async function remove({ path } = {}) {
   };
 }
 
+// 列表行。**列出全部登记库**（含被抑制的），因为 kb list 的职责是
+// 「我到底登记了哪些东西」；被抑制的照样出现，只是带上 standby 标记与原因。
+// 藏起来反而会让人以为登记丢了。
 async function listRows() {
-  const stored = await storedVaults();
+  const store = await loadStore();
+  const stored = (store.kb && store.kb.vaults) || [];
+  const suppressed = standbyVaults(store);
   const out = [];
   for (const rec of stored) {
     const dir = resolve(String(rec.path));
+    const because = suppressed.get(dir) || null;
     if (!(await isDir(dir))) {
-      out.push({ path: dir, name: rec.name || basename(dir), model: rec.model || null, missing: true });
+      out.push({
+        path: dir,
+        name: rec.name || basename(dir),
+        model: rec.model || null,
+        missing: true,
+        standby: !!because,
+        standbyBecause: because,
+      });
       continue;
     }
     const info = await inspect(dir);
@@ -262,10 +321,14 @@ async function listRows() {
       model: (idx && idx.embedding && idx.embedding.model) || null,
       plannedModel: rec.model || null,
       index: idx,
+      standby: !!because,
+      standbyBecause: because,
       ...info,
     });
   }
-  return out;
+  // 参与检索的在前、被抑制的在后——与 kb status 同一口径。
+  // 两个命令对同一份列表给出不同次序，会让人以为看的是两回事。
+  return [...out.filter((v) => !v.standby), ...out.filter((v) => v.standby)];
 }
 
 export async function list() {
@@ -356,7 +419,7 @@ async function indexOne(v, { rebuild, model, types }) {
 }
 
 export async function index({ root, rebuild = false, model, types } = {}) {
-  const { vaults } = await resolveVaults({ root });
+  const { vaults, standby } = await resolveVaults({ root });
 
   const zg = await probe();
   if (!zg.installed) {
@@ -368,7 +431,11 @@ export async function index({ root, rebuild = false, model, types } = {}) {
   const targets = vaults.filter((v) => !v.missing);
   const missing = vaults.filter((v) => v.missing).map((v) => v.path);
   if (!targets.length) {
-    throw notFound(`知识库目录都不存在，无法建索引：${missing.join('、')}`);
+    throw notFound(
+      missing.length
+        ? `知识库目录都不存在，无法建索引：${missing.join('、')}`
+        : `没有可建索引的库 —— ${standby.length} 个登记库都是抓取产物、与其源库内容重叠，默认不参与检索`
+    );
   }
 
   const results = [];
@@ -382,6 +449,13 @@ export async function index({ root, rebuild = false, model, types } = {}) {
     mode: rebuild ? 'rebuild' : 'incremental',
     count: results.length,
     missing,
+    // 被抑制的库如实带上：不报就是「我明明登记了它，索引却没碰」而且毫无线索。
+    standby: standby.map((v) => ({
+      path: v.path,
+      name: v.name,
+      because: v.standbyBecause,
+      note: standbyNote(v),
+    })),
     results,
     elapsedMs: results.reduce((n, r) => n + (r.elapsedMs || 0), 0),
   };
@@ -409,14 +483,19 @@ export async function status({ root } = {}) {
   const zg = await probe();
 
   let vaults = [];
+  let standby = [];
   let resolveError = null;
   try {
-    vaults = (await resolveVaults({ root })).vaults;
+    const r = await resolveVaults({ root });
+    vaults = r.vaults;
+    standby = r.standby;
   } catch (err) {
     resolveError = String((err && err.message) || err);
   }
 
-  if (!vaults.length) {
+  // 「未添加知识库」的判据必须把 standby 算进来：把登记过的东西报成「未添加」
+  // 是这套代码库最不该犯的错（等同于告诉用户「你的库丢了」）。真没登记过才走这里。
+  if (!vaults.length && !standby.length) {
     return {
       status: 'ok',
       zg,
@@ -432,14 +511,18 @@ export async function status({ root } = {}) {
   // 逐库并发探测：每个库要跑一次 `zg status`（约 2–6s），串行会让 3 个库的
   // 面板首屏变成 3 倍时长。不同 workspace 之间无共享状态，并发是安全的。
   const rows = await Promise.all(
-    vaults.map(async (v) => {
+    [...vaults, ...standby].map(async (v) => {
+      const sup = v.standby
+        ? { standby: true, standbyBecause: v.standbyBecause, standbyNote: standbyNote(v) }
+        : { standby: false };
       if (v.missing) {
-        return { ...v, indexed: false, notes: null, obsidian: false, hint: `目录不存在: ${v.path}` };
+        return { ...v, ...sup, indexed: false, notes: null, obsidian: false, hint: `目录不存在: ${v.path}` };
       }
       const info = await inspect(v.path);
       const idx = await indexStatus(v.path);
       return {
         ...info,
+        ...sup,
         // path 与 info.vault 是同一个值，但语义不同：vault 是「探测到的目录」，
         // path 是「列表里的这一条」。面板按列表渲染，需要 path 稳定在场。
         path: v.path,
@@ -449,29 +532,40 @@ export async function status({ root } = {}) {
         // 旧版在这里回落到 store 的全局 model，切换/新增库后会显示上一个库的残留值。
         model: (idx && idx.embedding && idx.embedding.model) || null,
         index: idx,
-        hint: vaultHint({ zgInstalled: zg.installed, info, idx }),
+        // 被抑制的库优先说「为什么没参与」，而不是「索引该更新了」——
+        // 后者会把人引去点「更新索引」，而那对本库根本不会生效。
+        hint: v.standby ? standbyNote(v) : vaultHint({ zgInstalled: zg.installed, info, idx }),
       };
     })
   );
 
-  const indexed = rows.filter((r) => r.indexed).length;
-  const stale = rows.filter((r) => r.index && r.index.stale).length;
+  const active = rows.filter((r) => !r.standby);
+  const standbyRows = rows.filter((r) => r.standby);
+  const indexed = active.filter((r) => r.indexed).length;
+  const stale = active.filter((r) => r.index && r.index.stale).length;
   return {
     status: 'ok',
     zg,
     configured: true,
     count: rows.length,
+    // 参与检索的在前、被抑制的在后：顺序即主次，扫一眼就知道谁在干活。
     vaults: rows,
+    suppressed: standbyRows.map((r) => ({ path: r.path, name: r.name, because: r.standbyBecause })),
     // 面板「添加目录」对话框的预填值从这里取，而不是在自己那边写死一个字符串——
     // 否则设了 NX_KN_EMBEDDING 的机器上，面板会把一个拉不下来的模型预填给用户。
     defaultModel: defaultEmbeddingFromEnv(),
-    // 聚合视图：面板顶部一句话能说清的就去这里取
+    // 聚合视图：面板顶部一句话能说清的就去这里取。
+    // 口径：vaults / indexed / stale / notes 都**只算参与检索的库**——
+    // 面板顶上那句「共 N 篇可索引 md」要是把被抑制的重复内容也算进去，
+    // 就是把一个虚高的数字摆在最显眼的位置。被抑制的部分单列 standby*，供查。
     totals: {
-      vaults: rows.length,
+      vaults: active.length,
+      standby: standbyRows.length,
       indexed,
       stale,
       missing: rows.filter((r) => r.missing).length,
-      notes: rows.reduce((n, r) => n + (r.notes || 0), 0),
+      notes: active.reduce((n, r) => n + (r.notes || 0), 0),
+      standbyNotes: standbyRows.reduce((n, r) => n + (r.notes || 0), 0),
     },
     indexed: indexed > 0,
     hint: !zg.installed
@@ -532,7 +626,7 @@ export async function query({ q, root, limit = 7, preview = 'short' } = {}) {
   const text = String(q ?? '').trim();
   if (!text) throw badInput(`用法: ${APP_NAME} query <问句> —— 查询不能为空`);
 
-  const { vaults } = await resolveVaults({ root });
+  const { vaults, standby } = await resolveVaults({ root });
 
   const usable = vaults.filter((v) => !v.missing && hasIndex(v.path));
   if (!usable.length) {
@@ -541,6 +635,9 @@ export async function query({ q, root, limit = 7, preview = 'short' } = {}) {
       status: 'ok',
       needIndex: true,
       vaults: vaults.map((v) => ({ path: v.path, name: v.name, missing: v.missing })),
+      // 顺带说明「你登记过、但这次没进来的那些」——只报「还没索引」
+      // 会让人以为登记丢了
+      suppressed: standby.map((v) => ({ path: v.path, name: v.name, because: v.standbyBecause })),
       hint: `知识库还没有索引——先跑 ${APP_NAME} index`,
     };
   }
@@ -587,8 +684,11 @@ export async function query({ q, root, limit = 7, preview = 'short' } = {}) {
     totalHits: merged.length,
     groups: per.flatMap((r) => r.groups),
     notes,
-    // 某个库召不回时不能整体报错：其余库的结果仍然有用，但必须让人知道少了谁
+    // 某个库召不回时不能整体报错：其余库的结果仍然有用，但必须让人知道少了谁。
+    // 被抑制的库排在最前、理由也最完整——它们不是「出错」，而是**被规则排除**，
+    // 这两件事在输出里必须能区分开，否则用户会去排查一个根本不存在的故障。
     skipped: [
+      ...standby.map((v) => ({ path: v.path, name: v.name, reason: standbyNote(v), standby: true })),
       ...vaults.filter((v) => v.missing).map((v) => ({ path: v.path, name: v.name, reason: '目录不存在' })),
       ...dropped.map((r) => ({ path: r.vault.path, name: r.vault.name, reason: r.error || '召回失败' })),
     ],

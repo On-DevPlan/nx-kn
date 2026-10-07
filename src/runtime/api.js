@@ -8,16 +8,17 @@ import { toErrorPayload, httpStatusOf, CODES } from '../core/errors/index.js';
 
 // 逐段比较两条模式，决定谁该先匹配：**字面量段优先于参数段**，段数多的优先。
 //
-// 为什么要排序而不是按声明顺序：`GET /api/repos/status` 与 `GET /api/repos/:id`
-// 都能匹配 `/api/repos/status`，谁先声明谁赢。一旦有人调整 actions 顺序，
-// 前者就会被后者抢走——这种 bug 只在运行时、且只在特定路径上出现，极难排查。
+// 为什么要排序而不是按声明顺序：本仓目前全是字面量路由，但只要有人加了
+// `GET /api/kb/:name`，它就会与 `GET /api/kb/status` 同时匹配 `/api/kb/status`，
+// 谁先声明谁赢。调整一次 actions 顺序，具体的那条就被参数那条抢走——
+// 这种 bug 只在运行时、且只在特定路径上出现，极难排查。
 //
 // 排序后，声明顺序不再影响匹配结果。
 //
-// 历史上的坑：只按"同位置字面量优先"判定，会让 `/api/env/status` 与
-// `/api/env/:name` **平局**（都在第 3 段，a 是字面量 b 是参数，按本应字面量胜出，
+// 历史上的坑：只按「同位置字面量优先」判定，会让 `/api/x/status` 与
+// `/api/x/:name` **平局**（都在第 3 段，a 是字面量 b 是参数，按本应字面量胜出，
 // 但当数组长度正好相同时，sort 把后面声明的放前面——而 `:name` 这条通常声明在
-// status 之后，于是 `/api/env/list` 落到 `:name` 上，把 `list` 当变量名去查了）。
+// status 之后，于是 `/api/x/list` 落到 `:name` 上，把 `list` 当变量名去查了）。
 //
 // 正确比较：算"前 N 段里**字面量段**的总个数"，多者优先；同字数时
 // 按"从左到右遇到的第一处分歧段"——字面量胜出。
@@ -65,7 +66,7 @@ async function readBody(req) {
 }
 
 // 跨站防护。服务虽然只绑 127.0.0.1，但用户浏览器里的任意页面都能向它发起请求——
-// 少了这道校验，一个恶意网页就能 POST /api/repos/scan 或 DELETE /api/repos/:id。
+// 少了这道校验，一个恶意网页就能 POST /api/kb/index 或 /api/crawl/run。
 // 浏览器发跨域请求必带 Origin，非浏览器客户端（curl / agent / 测试）不带，故放行。
 function originAllowed(req) {
   const origin = req.headers.origin;

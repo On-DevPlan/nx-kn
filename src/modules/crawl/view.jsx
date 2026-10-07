@@ -9,7 +9,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { api } from '../../web/frontend/api/client.js';
 import { CliHints } from '../../web/frontend/components/CliHints.jsx';
-import { useDialog, useToast } from '../../web/frontend/components/ui.jsx';
+import { Spinner, useDialog, useToast } from '../../web/frontend/components/ui.jsx';
 import { emitKbChanged } from '../../web/frontend/events.js';
 
 // 抓取是慢操作（内置引擎串行 + 300ms 节流，几百页可能要几分钟；外部引擎还要先拉依赖）。
@@ -110,6 +110,7 @@ export default function CrawlView() {
           const t = (crawl && crawl.result && crawl.result.totals) || {};
           toast(
             `[${out.name}] 整理 + 索引完成：新增 ${t.added} / 更新 ${t.updated} / 未变 ${t.unchanged}` +
+              (t.removed ? ` / 清理 ${t.removed}` : '') +
               (p.status !== 'ok' ? ' · 有步骤失败，见采集页' : '')
           );
           emitKbChanged();
@@ -144,6 +145,7 @@ export default function CrawlView() {
       const t = out.totals || {};
       toast(
         `已${rebuild ? '全量重抓' : '抓取更新'} ${out.count} 个源：新增 ${t.added} / 更新 ${t.updated} / 未变 ${t.unchanged}` +
+          (t.removed ? ` / 清理 ${t.removed}` : '') +
           (t.failed ? ` · 失败 ${t.failed} 页` : '')
       );
       emitKbChanged();
@@ -178,8 +180,8 @@ export default function CrawlView() {
 
   if (err) return <div className="empty bad">接口调用失败：{err}</div>;
 
+  // 与 kb 同一口径：列表还没回来时转圈，不要用 `…` 冒充「没有源」。
   const loading = st === null;
-  const pending = '…';
 
   return (
     <div className="stack">
@@ -188,7 +190,7 @@ export default function CrawlView() {
       <div className="card">
         <div className="colhead">
           <span>资料采集</span>
-          <span className="tag">{loading ? pending : `${st.count} 个源`}</span>
+          {loading ? <Spinner /> : <span className="tag">{st.count} 个源</span>}
         </div>
         <dl className="kv">
           <div className="kv-row">

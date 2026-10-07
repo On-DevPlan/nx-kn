@@ -6,7 +6,7 @@
 import { Suspense, lazy, useCallback, useEffect, useState } from 'react';
 import { api } from '../../web/frontend/api/client.js';
 import { CliHints } from '../../web/frontend/components/CliHints.jsx';
-import { useDialog, useToast } from '../../web/frontend/components/ui.jsx';
+import { Highlight, Spinner, useDialog, useToast } from '../../web/frontend/components/ui.jsx';
 import { onKbChanged } from '../../web/frontend/events.js';
 
 // 采集是知识库的上游阶段（抓取 → 索引 → 检索是一条流水线），整块嵌入本页顶部，
@@ -165,6 +165,22 @@ export default function KbView() {
     }
   }
 
+  // 让一个「默认未参与检索」的库（抓取产物，与其源库内容重叠）重新参与。
+  // 实现就是拿同一个路径再 kb add 一次——服务端会把它记成「用户显式要的」，
+  // 于是不再被重叠规则排除。不单开 /api/kb/enable：同一件事两个入口，迟早只改一边。
+  async function enableVault(path, name) {
+    setBusy('add');
+    try {
+      const out = await api('/api/kb/add', { method: 'POST', body: { path } });
+      toast(`[${name}] 已启用检索（共 ${out.count} 个库）`);
+      await refresh();
+    } catch (e) {
+      toast(String(e.message || e), 'bad');
+    } finally {
+      setBusy('');
+    }
+  }
+
   // 增量与全量走同一条 action，只是 rebuild 不同。分开两个按钮，
   // 是为了让「只是补几篇新笔记」不必付出「整个库重新嵌入」的代价——
   // 之前面板只有一个「重建索引」按钮，把最便宜的操作藏在了最贵的操作后面。
@@ -217,9 +233,8 @@ export default function KbView() {
 
   // st === null = 状态还没回来。此时绝不能把「未添加 / zg 未安装 / 未建」渲染出去：
   // 那是把「还不知道」说成「就是没有」。多库时 status 要逐库起 zg 子进程
-  // （已并发，但仍是秒级），冷启动更容易踩到。没回来就画省略号。
+  // （已并发，但仍是秒级），冷启动更容易踩到。没回来就转圈。
   const loading = st === null;
-  const pending = '…';
   const totals = st?.totals;
 
   return (
@@ -227,26 +242,31 @@ export default function KbView() {
       {dialogNode}
 
       {/* 上游阶段：资料采集（抓取/整理 → 自动登记为知识库）。抓完会广播事件刷新下方库列表 */}
-      <Suspense fallback={<div className="muted" style={{ padding: 24 }}>加载采集面板…</div>}>
+      <Suspense fallback={<div style={{ padding: 24 }}><Spinner label="加载采集面板…" /></div>}>
         <CrawlView />
       </Suspense>
 
       <div className="card">
         <div className="colhead">
           <span>知识库</span>
-          <span className="tag">
-            {loading ? pending : st.zg?.installed ? `zg ${st.zg.version || ''}` : 'zg 未找到'}
-          </span>
+          {loading ? <Spinner /> : (
+            <span className="tag">
+              {st.zg?.installed ? `zg ${st.zg.version || ''}` : 'zg 未找到'}
+            </span>
+          )}
         </div>
         <dl className="kv">
           <div className="kv-row">
             <dt>目录</dt>
             <dd className="mono">
-              {loading
-                ? pending
-                : st.configured
-                  ? `${totals.vaults} 个 · 索引 ${totals.indexed} 个 · 共 ${totals.notes} 篇可索引 md`
-                  : '（未添加）'}
+              {loading ? (
+                <Spinner label="正在读各库的索引状态…" />
+              ) : st.configured ? (
+                `${totals.vaults} 个 · 索引 ${totals.indexed} 个 · 共 ${totals.notes} 篇可索引 md` +
+                  (totals.standby ? ` · 未参与检索 ${totals.standby} 个` : '')
+              ) : (
+                '（未添加）'
+              )}
             </dd>
           </div>
           {!loading && totals?.stale > 0 && (
@@ -265,6 +285,7 @@ export default function KbView() {
               [{v.name}] {v.path}
             </div>
             <div className="acts">
+              {v.standby ? <span className="tag">未参与检索</span> : null}
               {v.missing ? (
                 <span className="tag bad">目录不存在</span>
               ) : v.indexed ? (
@@ -272,6 +293,16 @@ export default function KbView() {
               ) : (
                 <span className="tag">未建</span>
               )}
+              {v.standby ? (
+                <button
+                  className="btn small ghost"
+                  disabled={!!busy}
+                  onClick={() => enableVault(v.path, v.name)}
+                  title="让它参与检索。内容与源库重叠，同时参与会让同一篇笔记出两条命中"
+                >
+                  启用检索
+                </button>
+              ) : null}
               <button
                 className="btn small ghost"
                 disabled={!!busy}
@@ -286,6 +317,8 @@ export default function KbView() {
                 : `${notesText(v)}` +
                   ` · 索引 ${v.indexed ? `${v.index?.files ?? '?'}/${v.index?.filesTotal ?? '?'} 文件 · ${v.index?.entities ?? '?'} 片段` : '未建'}` +
                   ` · 模型 ${v.model || (v.plannedModel ? `（建时用 ${v.plannedModel}）` : '（未记录）')}`}
+              {/* 被排除的库必须自带解释，否则这一行看起来和「东西丢了」没区别 */}
+              {v.standby && v.hint ? <span className="muted">　{v.hint}</span> : null}
             </div>
           </div>
         ))}
@@ -361,6 +394,10 @@ export default function KbView() {
                 命中 {res.hits.length}/{res.totalHits} 条 · {(res.elapsedMs / 1000).toFixed(1)}s
                 {res.searched?.length > 1 ? ` · 检索了 ${res.searched.length} 个库` : ''}
                 {res.skipped?.length ? ` · 跳过 ${res.skipped.length} 个` : ''}
+                {/* 黄底只标「问句里的词在片段里字面出现」的位置。语义召回本就可能
+                    一个字都不重合（同义改写、换语言），那种片段没有黄块——先说明，
+                    免得被当成「高亮坏了」。 */}
+                <span> · <mark className="hl">黄底</mark> = 字面命中</span>
               </div>
               {res.hits.map((h) => (
                 // .row.wrap：命中带多行片段，用单行 28px 行会把片段裁到叠字。
@@ -369,7 +406,9 @@ export default function KbView() {
                     {/* 多库时先说是哪个库，否则相对路径无法定位到磁盘文件 */}
                     {res.searched.length > 1 ? <span className="muted">[{h.vaultName}] </span> : null}
                     {h.path}:{h.start}-{h.end}
-                    {h.heading ? <span className="muted"> · {h.heading}</span> : null}
+                    {h.heading ? (
+                      <span className="muted"> · <Highlight text={h.heading} query={res.query} /></span>
+                    ) : null}
                   </div>
                   <div className="acts">
                     {h.matchedBy.map((m) => <span className="tag" key={m}>{m}</span>)}
@@ -377,7 +416,11 @@ export default function KbView() {
                   </div>
                   <div className="desc">
                     <div className="snippet-box">
-                      <pre>{h.snippet || '（无片段：preview=none）'}</pre>
+                      <pre>
+                        {h.snippet
+                          ? <Highlight text={h.snippet} query={res.query} />
+                          : '（无片段：preview=none）'}
+                      </pre>
                     </div>
                   </div>
                 </div>

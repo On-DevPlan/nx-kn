@@ -13,7 +13,7 @@
 //      agent markdown output or --human」）——输出解析因此是本文件的正式组成部分，
 //      不是顺手加的小工具。解析规则有单测盯着（tests/unit/zg-parser.test.mjs）。
 import { spawn } from 'node:child_process';
-import { existsSync } from 'node:fs';
+import { existsSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { badInput, external } from './errors/index.js';
 
@@ -26,9 +26,21 @@ export function indexDirOf(root) {
   return join(root, INDEX_DIR);
 }
 
+// 「建过索引」的判据。
+//
+// ⚠️ 只看 `.zvec-grep` 目录在不在是不够的：zg 建索引中途失败会留下一个空壳目录。
+// 而**坏索引比「没建过」更难判断**——hasIndex 说「有」，query 却会失败，
+// 上层只能把该库记进 skipped[]、hits 为空，主结论被渲染成「（无命中）」，
+// 用户读到的意思是「库里没这内容」，而不是「索引坏了」。
+// 所以要求它同时具备（本机 zg 0.2.2 实测的目录形状）：
+//   1. manifest.json 存在且非空 —— zg 的索引清单，写好它就说明初始化跑完了
+//   2. files.zvec/ 存在          —— 真正存文件向量的地方
 export function hasIndex(root) {
   try {
-    return existsSync(indexDirOf(root));
+    const dir = indexDirOf(root);
+    const st = statSync(join(dir, 'manifest.json'));
+    if (!st.isFile() || st.size === 0) return false;
+    return existsSync(join(dir, 'files.zvec'));
   } catch {
     return false;
   }

@@ -4,16 +4,21 @@
    原子类抄过来——两层的变更纪律不同（见 style.css 头部说明）。
    ============================================================ */
 
-/* 头部：两行。第一行 = 身份（brand + 版本），第二行 = 导航（.tabbar）。
-   把「我是谁」和「我在哪」分开——挤一行时版本号跟着导航挤 flex，
-   两边都在争视觉重心，谁也不突出。 */
+/* 头部：**一行** —— 身份（brand）+ 导航（tabs）+ 版本号同排。
+   原先分两行（身份一行、导航一行）要多占约 35px；而 tab 只有三个、版本号也短，
+   横向空间完全够。合并后整块 sticky（原来只有 .tabbar 自己 sticky）：
+   吸顶的代价从「两行」降到「一行」，而 tab 是高频操作，值得常驻。
+   窄屏靠 flex-wrap 自然换行，副标题先让位（见文件末的 media query）。 */
 header {
+  position: sticky;
+  top: 0;
   display: flex;
   flex-wrap: wrap;
-  gap: 12px;
   align-items: center;
-  padding: 12px 16px;
+  gap: 0 12px;
+  padding: 0 16px;
   background: var(--paper);
+  border-bottom: var(--border);
   z-index: 5;
 }
 
@@ -33,23 +38,22 @@ header .meta {
   font-family: ui-monospace, Consolas, monospace;
 }
 
-/* 导航条：sticky 双保险（header 不再 sticky，它不挡内容），底线只在
-   tabbar 上——视觉上「标签在哪，分界线就在哪」 */
-.tabbar {
-  position: sticky;
-  top: 0;
-  background: var(--paper);
-  border-bottom: var(--border);
-  z-index: 5;
-}
-.tabbar nav { display: flex; flex-wrap: wrap; gap: 2px; padding: 0 16px; }
+/* 导航：header 内的一个 flex 子项。它**不再自己 sticky**——已经跟着 header 吸顶了，
+   再叠一层只会让标签在滚动中脱离品牌区（同一行里忽然错位）。
+   高度对齐 header 的 44px，标签底部的 2px 指示条才贴得住那条底线。 */
+.tabbar { min-width: 0; }
+.tabbar nav { display: flex; flex-wrap: wrap; gap: 2px; }
 
 /* 标签块：文字 + 底部 2px 指示条，占比重的是字号和字重，不是背景和阴影。
-   底部指示条贴住容器的 border-bottom，形成「标签页插在线上」的关系。 */
+   底部指示条贴住 header 的 border-bottom，形成「标签页插在线上」的关系——
+   所以它必须撑满 header 高度，不能靠 padding 缩在中间。 */
 .tab {
   border: 0;
   background: none;
-  padding: 7px 12px 9px;
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+  padding: 0 12px;
   border-radius: 0;
   cursor: pointer;
   color: var(--mid);
@@ -61,6 +65,12 @@ header .meta {
   color: var(--ink);
   font-weight: 600;
   box-shadow: inset 0 -2px 0 var(--ink);
+}
+
+/* 窄屏：先让副标题消失——它不是信息，是注解。省下这 ~150px 通常就够了，
+   换行是兜底而不是常态。720px 来自三块内容的实测宽度（brand ≈ 300 + 三个 tab ≈ 200）。 */
+@media (max-width: 720px) {
+  .brand .sub { display: none; }
 }
 
 

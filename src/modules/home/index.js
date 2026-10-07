@@ -50,29 +50,47 @@ export default {
       summary: '自检：存储可读、命令表可生成',
       run: async () => {
         const { commandTable } = await import('./commands.js');
+        const { loadStore, storeRecovery } = await import('../../core/store.js');
         const table = await commandTable();
         const b = await service.bootstrap();
+        // **真的读一次存储**——summary 里「存储可读」这句得是真的。
+        // 顺带触发 core/store.js 的损坏隔离：文件不是合法 JSON 时会被挪成备份，
+        // 这里把结果报出来（否则那次隔离只存在于 stderr 里，很容易漏掉）。
+        const store = await loadStore();
         return {
           status: 'ok',
           app: b.app.name,
           version: b.app.version,
           storePath: b.storePath,
           commands: table.length,
+          vaults: store.kb.vaults.length,
+          sources: store.crawl.sources.length,
+          storeRecovery: storeRecovery() || null,
         };
       },
       render: (r) =>
-        `正常 · ${r.app} v${r.version} · ${r.commands} 条命令\n存储: ${r.storePath}`,
+        [
+          `正常 · ${r.app} v${r.version} · ${r.commands} 条命令`,
+          `存储: ${r.storePath}（知识库 ${r.vaults} 个 · 采集源 ${r.sources} 个）`,
+          r.storeRecovery
+            ? `⚠ 存储文件曾被隔离：备份在 ${r.storeRecovery.backup}\n` +
+              `  原因 ${r.storeRecovery.reason}\n` +
+              `  确认备份内容无误后改回原路径；否则本次运行会以空结构继续，下次写入即覆盖`
+            : null,
+        ]
+          .filter(Boolean)
+          .join('\n'),
     },
     {
       id: 'home.pipeline',
       cli: ['pipeline'],
       http: ['POST', '/api/pipeline/run'],
       summary:
-        '一键流水线：抓取 → 更新索引（两步串联）。传目录/URL 未登记会自动登记；传源名只跑该源',
+        '一键流水线：抓取 → 更新索引（两步串联）。传目录/URL 未登记会自动登记；传源名只抓该源，索引仍是全局增量',
       args: [{ name: 'target', required: false, hint: '本地目录、文档站 URL 或已有源名（可省略 = 全部源）' }],
       flags: {
         rebuild: { type: 'boolean', hint: '全量重抓 + 全量重建索引（默认都走增量）' },
-        name: { type: 'string', hint: '只跑这个源（与位置参数二选一）' },
+        name: { type: 'string', hint: '只抓这个源（索引步骤不受它影响）' },
       },
       run: (ctx) => service.pipeline({ rebuild: ctx.rebuild, target: ctx.target, name: ctx.name }),
       render: (r) => {

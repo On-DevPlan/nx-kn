@@ -67,8 +67,9 @@ function coerceOne(name, spec, raw) {
 
 // 参数缺失/非法时的统一报错。
 //
-// 「用法:」前缀是**对外契约**：assets/repo-hub/references/agent-workflow.md 明确
-// 教 agent 用错误文本里的「用法:」判定为参数错误，并据此决定「停下来问人」。
+// 「用法:」前缀是**对外契约**：assets/nx-kn/SKILL.md 明确教 agent 用错误文本里的
+// 「用法:」判定为参数错误，并据此决定「停下来问人」（core/errors/index.js 的
+// 文件头也记着同一条约束：message 可以追加，但不得删掉这三个子串）。
 // 所以这里不能只写「缺少参数 X」，必须带上完整用法串。
 function inputError(action, detail) {
   return badInput(`用法: ${usageOf(action)} —— ${detail}`);
@@ -99,7 +100,7 @@ export function applySpec(action, raw) {
   return out;
 }
 
-// ---- HTTP 路由模式编译：'/api/repos/:id' → 正则 + 键名 ----
+// ---- HTTP 路由模式编译：'/api/<域>/:name' → 正则 + 键名 ----
 
 const ROUTE_CACHE = new WeakMap();
 

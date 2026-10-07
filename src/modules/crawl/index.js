@@ -24,6 +24,8 @@ function changesLine(c) {
   if (c.updated) parts.push(`更新 ${c.updated}`);
   parts.push(`未变 ${c.unchanged}`);
   if (c.skipped) parts.push(`跳过空页 ${c.skipped}`);
+  // 清理数单独报：它是「目录变小了」的唯一解释，混进 other 里就没人看得见
+  if (c.removed) parts.push(`清理 ${c.removed}`);
   return parts.join(' / ');
 }
 
@@ -113,6 +115,9 @@ export default {
           `共写入 ${r.totals.pages} 页（新增 ${r.totals.added} / 更新 ${r.totals.updated} / 未变 ${r.totals.unchanged}）`
         );
         if (r.totals.failed) lines.push(`失败 ${r.totals.failed} 页（见上）`);
+        if (r.totals.removed) {
+          lines.push(`清理 ${r.totals.removed} 个陈旧文件（远端已删 / 换引擎残留；手放进去的文件不受影响）`);
+        }
         if (r.results[0]) lines.push('', `继续：${hint('index')} 把抓到的内容加进索引`);
         return lines.join('\n');
       },

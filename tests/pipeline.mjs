@@ -27,6 +27,7 @@
 //   P16 本地目录源        crawl add 本地目录   → skill-seekers 整理入库 + 引擎双闸（假引擎，不联网）
 //   P17 一键流水线        pipeline             → 抓取 + 索引一条命令串完 + 幂等（假引擎，不联网）
 //   P18 一步直达          pipeline <目录>      → 未登记自动登记再抓取 + 索引；同目录重复 = 增量
+//   P19 产物/源库重叠     kb add + crawl run   → 默认只留源库参与检索；kb add 产物 = 启用
 //
 // 隔离：临时 store + 临时 skills 目录 + 临时 vault，绝不碰用户的真实数据。
 // （采集产物目录跟着 store 走，见 core/paths.js 的 sourcesDir()——所以隔离是全覆盖的。）
@@ -165,6 +166,8 @@ function startDocSite() {
       ready({
         base: `http://127.0.0.1:${port}/`,
         set: (p, html) => pages.set(p, html),
+        // 删页 = 站点改版（页面下架）。sitemap 由 pages 现推，所以它会一并从 sitemap 消失。
+        del: (p) => pages.delete(p),
         close: () => new Promise((r) => server.close(r)),
       });
     });
@@ -440,6 +443,58 @@ test('流水线：skill 安装 → 建库 → 建索引 → 检索 → 增量 �
     assert.equal(c3.updated, 1, '只有改动过的那一页该被重写');
     assert.equal(c3.unchanged, 2);
     assert.match(readFileSync(join(third.results[0].dir, 'api', 'reference.md'), 'utf8'), /apiword-changed/);
+  });
+
+  await t.test('P11b 采集清理：远端删页 / 换引擎都不在 sources/ 里留残骸，手放的文件不动', async (t2) => {
+    const site = await startDocSite();
+    t2.after(() => site.close());
+
+    await runJson(['crawl', 'add', site.base, '--name', 'prune', '--engine', 'node', '--json'], env);
+    const first = await runJson(['crawl', 'run', '--name', 'prune', '--json'], env, { timeoutMs: 120_000 });
+    const dir = first.results[0].dir;
+    assert.equal(first.results[0].changes.added, 3);
+    assert.equal(first.results[0].changes.removed, 0, '首次抓取没有可清理的东西');
+    assert.ok(existsSync(join(dir, 'api', 'reference.md')));
+
+    // 手放进源目录的文件：不该在 manifest 的名单里，**永远**不能被清理碰到
+    writeFileSync(join(dir, 'manual-note.md'), '# 手工放进来的\n', 'utf8');
+
+    // ① 远端删页：站点撤掉 /api/reference（它同时从 sitemap 里消失）
+    site.del('/api/reference');
+    const second = await runJson(['crawl', 'run', '--name', 'prune', '--json'], env, { timeoutMs: 120_000 });
+    const c2 = second.results[0].changes;
+    assert.equal(c2.removed, 1, '远端已删的页面应从 sources/ 里清掉');
+    assert.equal(c2.unchanged, 2, '其余两页不受影响');
+    assert.equal(second.results[0].pages, 2, 'manifest 的页数应缩到 2');
+    assert.ok(!existsSync(join(dir, 'api', 'reference.md')), '被删页面的 .md 不该留在盘上');
+    assert.ok(!existsSync(join(dir, 'api')), '它留下的空目录也该被收掉');
+    assert.ok(existsSync(join(dir, 'manual-note.md')), '手工放进源目录的文件不得被清理');
+
+    // ② 换引擎：node → skill-seekers（假引擎，不联网）。两个引擎的落盘命名空间不同
+    //    （node 按 URL 推路径，ss 按它自己的分类目录），旧文件不会被任何一次抓取覆盖，
+    //    所以必须由清理兜住——否则同一份内容会有两套文件、两条检索命中。
+    const fake = join(ROOT, 'tests', 'fixtures', 'fake-skill-seekers.mjs');
+    const ssEnv = { ...env, NX_KN_SKILL_SEEKERS_CMD: JSON.stringify([process.execPath, fake]) };
+    const third = await runJson(['crawl', 'run', '--name', 'prune', '--engine', 'skill-seekers', '--json'], ssEnv, {
+      timeoutMs: 120_000,
+    });
+    const c3 = third.results[0].changes;
+    assert.equal(third.results[0].engine, 'skill-seekers');
+    assert.equal(c3.removed, 2, '换引擎应清掉旧引擎留下的两个文件');
+    assert.ok(existsSync(join(dir, 'SKILL.md')), '新引擎的产出应在');
+    assert.ok(existsSync(join(dir, 'references', 'guide.md')));
+    assert.ok(!existsSync(join(dir, 'index.md')), '旧引擎的 index.md 应被清掉');
+    assert.ok(!existsSync(join(dir, 'guide')), '旧引擎遗留的目录也该收掉');
+    assert.ok(existsSync(join(dir, 'manual-note.md')), '换引擎同样不该碰手放的文件');
+
+    // ③ 幂等：再跑一次没有新的可清理项
+    const fourth = await runJson(['crawl', 'run', '--name', 'prune', '--json'], ssEnv, { timeoutMs: 120_000 });
+    assert.equal(fourth.results[0].changes.removed, 0, '清理是一次性的，不该反复报');
+    assert.equal(fourth.results[0].changes.unchanged, 2);
+
+    // 收尾：连目录与知识库登记一起撤掉，别给后面的用例留下额外状态
+    // （P12 断言知识库恰好 2 个、P13 收尾断言采集源归零）
+    await runJson(['crawl', 'remove', 'prune', '--purge', '--json'], ssEnv);
   });
 
   await t.test('P12 采集内容可检索：index + query 命中抓下来的页面并读到原文', async () => {
@@ -786,5 +841,108 @@ test('流水线：skill 安装 → 建库 → 建索引 → 检索 → 增量 �
     assert.equal(r3.steps.find((s) => s.id === 'register').result.added, false, '源名应直接命中现源');
 
     await runJson(['crawl', 'remove', 'Local-Vault', '--purge', '--json'], ssEnv);
+  });
+
+  // ---- 阶段 7：抓取产物与源库重叠时，默认只留一份参与检索（F8）----
+  //
+  // 为什么非要在真命令上跑一遍：判据横跨**两个域的事实**（crawl 源的 url ↔ kb 库的 path），
+  // 单测只能各自钉住一半——真正的失效方式是「两个事实都在、但没对上」，
+  // 那只有端到端能看出来。
+  await t.test('P19 抓取产物与源库重叠：默认只留源库参与检索，kb add 一次即启用', async () => {
+    const fake = join(ROOT, 'tests', 'fixtures', 'fake-skill-seekers.mjs');
+    const ssEnv = { ...env, NX_KN_SKILL_SEEKERS_CMD: JSON.stringify([process.execPath, fake]) };
+    const localVault = join(base, 'Overlap Vault');
+    mkdirSync(localVault, { recursive: true });
+    writeFileSync(join(localVault, '笔记A.md'), '# 笔记A\n\n重叠判定测试。\n', 'utf8');
+
+    const cleanup = async () => {
+      for (const args of [
+        ['crawl', 'remove', 'overlap', '--purge', '--json'],
+        ['kb', 'remove', localVault, '--json'],
+      ]) {
+        try {
+          await runJson(args, ssEnv, { timeoutMs: 120_000 });
+        } catch {
+          /* 收尾失败不该掩盖断言结果 */
+        }
+      }
+    };
+
+    try {
+      // ① 源目录先登记为知识库——很自然的用法：我想让自己的笔记能被搜到
+      await runJson(['kb', 'add', localVault, '--json'], ssEnv);
+      await runJson(['index', '--json'], ssEnv, { timeoutMs: 300_000 });
+
+      // ② 再把同一个目录交给 crawl 整理 → 产物自动登记为第二个知识库
+      await runJson(['crawl', 'add', localVault, '--name', 'overlap', '--json'], ssEnv);
+      const run = await runJson(['crawl', 'run', '--name', 'overlap', '--json'], ssEnv, {
+        timeoutMs: 120_000,
+      });
+      const productDir = run.results[0].dir;
+      assert.match(
+        run.results[0].note || '',
+        /内容重叠/,
+        '抓完当场就要报出「与源库重叠」——静默是这条规则唯一不可接受的形态'
+      );
+
+      // ③ kb list / status 如实标出「未参与检索」并给出原因
+      const list = await runJson(['kb', 'list', '--json'], ssEnv);
+      const product = list.vaults.find((v) => resolve(v.path) === resolve(productDir));
+      assert.ok(product, '产物仍应登记在册（排除 ≠ 删除登记）');
+      assert.equal(product.standby, true, '产物应被标为未参与检索');
+      assert.equal(resolve(product.standbyBecause), resolve(localVault), '原因要指回源库');
+
+      const status = await runJson(['status', '--json'], ssEnv, { timeoutMs: 120_000 });
+      assert.equal(status.totals.standby, 1);
+      assert.equal(status.suppressed.length, 1);
+      const srow = status.vaults.find((v) => resolve(v.path) === resolve(productDir));
+      assert.equal(srow.standby, true);
+      assert.match(srow.hint || '', /kb add/, '提示里要给出启用方式，而不是只说「未参与」');
+
+      // ④ 检索只扫源库，且把被排除的**单独**报出来。
+      // 注意这条断言为什么还不够：产物此刻**本来就没建过索引**（被排除的库不会进 index），
+      // 所以光看「没被搜到」可能是「没索引」而不是「被规则排除」。真正的证据落在下面
+      // 那条 skipped ——它是被规则标出来的，不是碰巧没索引。
+      const q = await runJson(['query', 'skseeker-root-word', '--json'], ssEnv, { timeoutMs: 120_000 });
+      assert.ok(
+        !q.searched.some((v) => resolve(v.path) === resolve(productDir)),
+        '产物默认不参与召回'
+      );
+      assert.ok(
+        q.skipped.some((s) => s.standby && resolve(s.path) === resolve(productDir)),
+        '被规则排除的库要出现在 skipped 里，且与「出错跳过」区分开'
+      );
+
+      // ⑤ 启用：一条**已有**命令（kb add），不新增开关
+      await runJson(['kb', 'add', productDir, '--json'], ssEnv);
+
+      // 规则层面立刻生效：不再被排除
+      const list2 = await runJson(['kb', 'list', '--json'], ssEnv);
+      assert.equal(
+        list2.vaults.find((v) => resolve(v.path) === resolve(productDir)).standby,
+        false,
+        'kb add 之后不再被标为未参与'
+      );
+
+      // 行为层面也真的进得来：建索引后能被召回。
+      // 这一步刻意保留——「登记状态对了」和「内容真能被搜到」是两件事，中间隔着 index，
+      // 而这条链正是最容易被「看起来修好了」糊过去的地方。
+      await runJson(['index', '--json'], ssEnv, { timeoutMs: 300_000 });
+      // --limit 放大：默认 7 条在多库下有可能被别的命中挤掉，那会变成一条偶发失败的断言
+      const q2 = await runJson(['query', 'skseeker-root-word', '--limit', '20', '--json'], ssEnv, {
+        timeoutMs: 120_000,
+      });
+      assert.ok(
+        q2.searched.some((v) => resolve(v.path) === resolve(productDir)),
+        'kb add + index 之后产物参与检索'
+      );
+      assert.ok(
+        q2.hits.some((h) => resolve(h.vault) === resolve(productDir)),
+        '产物里的词要真的命中——否则只是「参与了但搜不到」'
+      );
+      assert.ok(q2.skipped.every((s) => !s.standby), '不再有被规则排除的库');
+    } finally {
+      await cleanup();
+    }
   });
 });

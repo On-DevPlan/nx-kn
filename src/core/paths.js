@@ -1,8 +1,12 @@
 // 路径与安全校验：项目里所有「东西放哪」都从这里取，不在别处拼字符串。
 //
-// ⚠️ 本文件是生成器的**参数化中心**——新项目由模板生成时，只有这里的
-// nx-kn / nx-kn / Obsidian 知识库检索（zg 引擎） / 7881 被替换，其余文件一律引用这些常量。
+// ⚠️ 本文件是生成器的**参数化中心**——新项目由模板生成时，只替换这里的
+// APP_NAME / APP_TITLE / APP_DESC / DEFAULT_PORT 四个占位（本仓取值依次是
+// nx-kn / nx-kn / Obsidian 知识库检索（zg 引擎） / 7881），其余文件一律引用这些常量。
 // 要加新常量请加在这里，不要在别处写字符串字面量。
+//
+// 注意 APP_TITLE 与 APP_NAME 在本仓是**同一个值**（模板把两处占位填成一样）。
+// 展示标题的地方要先判重，别把名字打两遍——runtime/cli.js 的 appHead() 负责这件事。
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { badInput } from './errors/index.js';

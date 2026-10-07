@@ -44,6 +44,10 @@ export function formatBytes(n) {
 // 未登记自动登记，已登记复用现源（幂等：重复提供同目录 = 增量重跑，不是报冲突）。
 // name 与 target 等价但只认源名（面板添加本地源后直达用）。
 //
+// ⚠️ 范围只缩**抓取**那一步：索引步骤固定对全部已登记库跑增量（不带 root）。
+// 理由是「增量索引本来就只碰有变化的库」，所以多库时这条命令的耗时与日志
+// 会包含其它库——文案已经照实说明，别让用户以为索引也被缩了范围。
+//
 // 每步独立容错：抓取失败不阻断索引（上一次的产物可能还在，索引照样有价值），
 // 步骤结果如实体现在返回值里，整体 status 只有在全部成功/跳过时才是 ok。
 export async function pipeline({ rebuild, target, name } = {}) {
@@ -89,8 +93,18 @@ export async function pipeline({ rebuild, target, name } = {}) {
 
   // ② 索引：没有知识库就跳过（始终全量范围——增量索引本来就只碰有变化的库）
   const st = await kbSvc.status({});
-  if (!st.configured || !st.totals || !st.totals.vaults) {
+  if (!st.configured) {
     steps.push({ id: 'index', status: 'skipped', note: '没有知识库' });
+  } else if (!st.totals || !st.totals.vaults) {
+    // 登记过库、但没有一个可索引的。必须把两种「没有」分开说：
+    // 报成「没有知识库」会让人以为登记丢了，而真实情况是库都在、只是被判为重复。
+    steps.push({
+      id: 'index',
+      status: 'skipped',
+      note: st.totals?.standby
+        ? `${st.totals.standby} 个库都是抓取产物、与源库内容重叠，默认不参与检索`
+        : '没有可索引的库',
+    });
   } else {
     try {
       steps.push({ id: 'index', status: 'ok', result: await kbSvc.index({ rebuild: !!rebuild }) });
