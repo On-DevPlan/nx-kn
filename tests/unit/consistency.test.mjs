@@ -82,11 +82,22 @@ test('view.jsx 只 import 前端壳与 react（不拖 node 侧代码进浏览器
 const CMD_RE = /nx-kn[ \t]+([a-z][a-z0-9-]*(?:[ \t]+[a-z][a-z0-9-]*)?)/g;
 
 function docFiles() {
-  const files = [join(ROOT, 'assets', 'nx-kn', 'SKILL.md')];
-  const refDir = join(ROOT, 'assets', 'nx-kn', 'references');
-  if (existsSync(refDir)) {
-    for (const f of readdirSync(refDir)) {
-      if (f.endsWith('.md')) files.push(join(refDir, f));
+  // 多 skill 模式：扫描 assets/<name>/SKILL.md + references/*.md
+  // 默认至少包含 nx-kn 本体；后续任何带 SKILL.md 的兄弟目录一并扫。
+  const files = [];
+  const assetsDir = join(ROOT, 'assets');
+  if (existsSync(assetsDir)) {
+    for (const entry of readdirSync(assetsDir, { withFileTypes: true })) {
+      if (!entry.isDirectory()) continue;
+      const skillRoot = join(assetsDir, entry.name);
+      const skillMd = join(skillRoot, 'SKILL.md');
+      if (existsSync(skillMd)) files.push(skillMd);
+      const refDir = join(skillRoot, 'references');
+      if (existsSync(refDir)) {
+        for (const f of readdirSync(refDir)) {
+          if (f.endsWith('.md')) files.push(join(refDir, f));
+        }
+      }
     }
   }
   return files;

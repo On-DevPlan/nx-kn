@@ -64,8 +64,11 @@ CLI 与 Web 面板共享同一份 action 声明。需要时还能把**文档站�
 | `nx-kn help [topic]` | 帮助；`help --json` 输出可解析命令表 |
 | `nx-kn health` | 自检 |
 | `nx-kn settings get` / `set k=v...` | 读写设置（白名单外的键被拒绝） |
-| `nx-kn skill install [--to 目录] [--force]` | 把用法装给本机 agent（默认 `~/.claude/skills`；`--to` 可换落点） |
-| `nx-kn skill get [ref]` | 导出 skill 上下文（正文 + 安装状态；不读本机 skill 目录的外部 agent 用它） |
+| `nx-kn skill install [name] [--to 目录] [--force]` | 把用法装给本机 agent（默认 `~/.claude/skills`；无 [name] 装默认 skill） |
+| `nx-kn skill install --group=<key> [--to 目录] [--force]` | 一键装某个 group（来自 `assets/groups.json`；与 [name] 互斥） |
+| `nx-kn skill list` | 列出可装的 skill + group（含默认 install 标记；`groups.json` 缺失时降级到目录扫描） |
+| `nx-kn skill groups` | 列出可装的 group（key + skill 名列表 + summary） |
+| `nx-kn skill get [name] [ref]` | 导出 skill 上下文（正文 + 安装状态；不读本机 skill 目录的外部 agent 用它） |
 | 任何命令 + `--json` | 机器可读输出（agent 模式） |
 | 任何命令 + `--store <path>` | 本次运行覆盖存储路径（测试防污染必用） |
 

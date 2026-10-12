@@ -140,24 +140,110 @@ export default {
       render: (r) => `${r.path}    （默认 ${r.default}）`,
     },
     {
+      // skill install 多 skill 形态（per B04）：
+      //   1. 无参                 → 默认 install（= package.json.name = APP_NAME）
+      //   2. [name]                → 单 skill install（位置参数）
+      //   3. --group=<g>           → 一键装 group（与 [name] 互斥）
+      //   4. [name] + --group=<g>  → 互斥报错
       id: 'home.skillInstall',
       cli: ['skill', 'install'],
       http: ['POST', '/api/skill/install'],
-      summary: '把随包 skill 装到 ~/.claude/skills（让本机 agent 学会用法）',
+      summary:
+        '把随包 skill 装到 ~/.claude/skills；[name] / --group 二选一（都不传 = 默认）',
+      args: [{ name: 'name', required: false }],
       flags: {
-        name: { type: 'string' },
+        group: {
+          type: 'string',
+          hint: 'group 名（与位置参数 [name] 互斥）',
+        },
         to: { type: 'string' },
         force: { type: 'boolean' },
       },
       run: async (ctx) => {
-        const { installBundledSkill } = await import('../../runtime/skill.js');
-        return installBundledSkill({ name: ctx.name, to: ctx.to, force: ctx.force });
+        const { runInstall } = await import('../../runtime/skill.js');
+        return runInstall({
+          name: ctx.name,
+          group: ctx.group,
+          to: ctx.to,
+          force: ctx.force,
+        });
       },
       render: (r) => {
-        if (r.skipped) return `已是最新: ${r.path}`;
-        if (r.status === 'conflict')
-          return `冲突: ${r.path}（${r.count} 个文件不同；确认覆盖加 --force）`;
-        return `${r.replaced ? '已替换' : '已安装'}: ${r.path}（${r.files} 个文件）`;
+        // 单 skill（r.group === null）：与历史形状一致
+        if (r.group === null) {
+          if (r.skipped) return `已是最新: ${r.path}`;
+          if (r.status === 'conflict')
+            return `冲突: ${r.path}（${r.count} 个文件不同；确认覆盖加 --force）`;
+          return `${r.replaced ? '已替换' : '已安装'}: ${r.path}（${r.files ?? 0} 个文件）`;
+        }
+        // group install：聚合形态
+        const lines = [`已装 group: ${r.group}（${r.skills.length} 个 skill）`];
+        for (const s of r.skills) {
+          if (s.conflict) lines.push(`  · ${s.skill}：冲突 ${s.path}`);
+          else if (s.skipped) lines.push(`  · ${s.skill}：已是最新 ${s.path}`);
+          else lines.push(`  · ${s.skill}：${s.replaced ? '已替换' : s.installed ? '已安装' : '完成'} ${s.path}`);
+        }
+        return lines.join('\n');
+      },
+    },
+    {
+      // skill list: 列所有 skill + group，标默认 install；--json 输出五元
+      // skill 与 group 命名去重（同一 skill 在多个 group 也只列一次）
+      id: 'home.skillList',
+      cli: ['skill', 'list'],
+      http: null,
+      summary:
+        '列出可装的 skill / group（含默认 install 标记；groups.json 缺失时降级到目录扫描）',
+      run: async () => {
+        const { runList } = await import('../../runtime/skill.js');
+        return runList();
+      },
+      render: (r) => {
+        const lines = [];
+        const skills = new Set();
+        for (const g of r.groups) for (const s of g.skills) skills.add(s);
+        const skillList = [...skills];
+        lines.push('可装的 skill:');
+        if (skillList.length === 0) lines.push('  (无)');
+        for (const s of skillList) {
+          const isDefault = r.groups.some((g) => g.isDefault && g.skills.includes(s));
+          lines.push(`  * ${s}${isDefault ? '  （默认 install）' : ''}`);
+        }
+        lines.push('');
+        lines.push('可装的 group:');
+        if (r.groups.length === 0) lines.push('  (无)');
+        for (const g of r.groups) {
+          lines.push(`  * ${g.name}${g.isDefault ? '  （默认 install）' : ''}`);
+        }
+        if (r.source && r.source !== 'manifest') {
+          lines.push('');
+          lines.push(`注：groups.json 不可用，本次用目录扫描兜底（source=${r.source}）`);
+        }
+        return lines.join('\n');
+      },
+    },
+    {
+      // skill groups: 只列 group（list 的精简版）
+      id: 'home.skillGroups',
+      cli: ['skill', 'groups'],
+      http: null,
+      summary: '列出可装的 group（key + skill 名列表 + summary）',
+      run: async () => {
+        const { runGroups } = await import('../../runtime/skill.js');
+        return runGroups();
+      },
+      render: (r) => {
+        if (!r.groups.length) return '可装的 group: (无)';
+        const lines = ['可装的 group:'];
+        for (const g of r.groups) {
+          lines.push(`  * ${g.name}${g.isDefault ? '  （默认 install）' : ''}  → ${g.skills.join(', ')}`);
+          if (g.summary) lines.push(`    ${g.summary}`);
+        }
+        if (r.source && r.source !== 'manifest') {
+          lines.push('');
+          lines.push(`注：groups.json 不可用，本次用目录扫描兜底（source=${r.source}）`);
+        }
+        return lines.join('\n');
       },
     },
     {
@@ -166,9 +252,26 @@ export default {
       http: null, // 纯 stdout 契约：三段拼接给外部 agent，无 HTTP 形态
       summary: '导出 skill 上下文（prefix + 文档 + install 状态，供外部 agent 复制）',
       args: [{ name: 'ref', required: false }],
-      flags: { name: { type: 'string' }, to: { type: 'string' }, force: { type: 'boolean' } },
+      flags: { name: { type: 'string' }, group: { type: 'string' }, to: { type: 'string' }, force: { type: 'boolean' } },
       run: async (ctx) => {
+        // --group 与 [name] 互斥，与 install 同形态
         const { getSkill } = await import('../../runtime/skill.js');
+        if (ctx.group !== undefined && ctx.group !== null && ctx.name !== undefined && ctx.name !== null) {
+          const { badInput } = await import('../../core/errors/index.js');
+          throw badInput('--group 与 [name] 互斥；二选一');
+        }
+        if (ctx.group !== undefined && ctx.group !== null) {
+          const { runGroups } = await import('../../runtime/skill.js');
+          const { badInput } = await import('../../core/errors/index.js');
+          const r = await runGroups();
+          const g = r.groups.find((x) => x.name === ctx.group);
+          if (!g) {
+            const available = r.groups.map((x) => x.name).join(', ');
+            throw badInput(`未知 group: ${ctx.group}（可用: ${available || '(无)'}）`);
+          }
+          // group 模式下：取该 group 下第一个 skill 作为 get 目标（保留 [ref] 用于 references/）
+          return getSkill({ name: g.skills[0], ref: ctx.ref, to: ctx.to, force: ctx.force, group: ctx.group });
+        }
         return getSkill({ ref: ctx.ref, name: ctx.name, to: ctx.to, force: ctx.force });
       },
       render: async (r) => {

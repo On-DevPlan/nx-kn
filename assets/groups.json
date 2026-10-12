@@ -1,0 +1,14 @@
+{
+  "version": 1,
+  "$comment": "group 名 → skill 名列表的别名表。asset 路径恒由 assets/<skills[i]>/ 推导 —— 本文件只做聚合，不是第二条事实源。groups.json 缺失/损坏时降级到目录扫描（每个 assets/<x>/SKILL.md 视为一个 group），不崩。默认 group 必须与 package.json.name 同名（=nx-kn）以满足 B04 默认 install 约定。",
+  "groups": {
+    "nx-kn": {
+      "skills": ["nx-kn"],
+      "summary": "本项目主 skill（默认 install 装的就是这个）"
+    },
+    "kn-obsidian-repair-unresolved-links": {
+      "skills": ["kn-obsidian-repair-unresolved-links"],
+      "summary": "Obsidian 未解析双链补全：扫描未解析 [[]]、生成合规 frontmatter、批量创建笔记、postcheck 校验内部双链全套 SOP"
+    }
+  }
+}
