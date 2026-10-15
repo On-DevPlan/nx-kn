@@ -335,6 +335,9 @@ function normalizeNeeddoItem(it) {
     title: it.title ? String(it.title) : '',
     content: typeof it.content === 'string' ? it.content : '',
     excerpt: typeof it.excerpt === 'string' ? it.excerpt : '',
+    // 文字条目里可能夹着链接（「看一下这个 https://… 再决定」）——原文保持不动，
+    // 抽出来的 URL 附在这里，详情视图给可点、整理报告里单列。空数组 = 没夹链接。
+    links: Array.isArray(it.links) ? it.links.filter((x) => typeof x === 'string' && x) : [],
     file: it.file ? String(it.file) : null,
     textFile: it.textFile ? String(it.textFile) : null,
     ext,

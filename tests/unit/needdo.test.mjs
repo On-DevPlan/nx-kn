@@ -35,6 +35,17 @@ test('add：文字 / 链接 / 非法输入', async () => {
   await assert.rejects(needdo.add({}), /没有可入库的内容/);
 });
 
+test('混排文字：原文不动，夹着的 URL 抽进 links（去重）', async () => {
+  freshEnv();
+  const it = await needdo.addText(
+    '先看 https://a.com/x 再看 http://b.com/y，第一遍给的 https://a.com/x 是同一篇。正文保持原样。'
+  );
+  assert.deepEqual(it.links, ['https://a.com/x', 'http://b.com/y']);
+  assert.match(it.content, /https:\/\/a\.com\/x 再看/, '原文必须原样保留');
+  const clean = await needdo.addText('没有链接的一段话');
+  assert.deepEqual(clean.links, []);
+});
+
 test('file：docx 提取出段落文本', async () => {
   freshEnv();
   const buf = makeZip([
@@ -126,14 +137,69 @@ test('process：主题分类、归档与整理报告', async () => {
   assert.equal(r2.report, null);
 });
 
-test('archive：归档可逆', async () => {
+test('archive：归档可逆，批量与 missing 如实回报', async () => {
   freshEnv();
   const a = await needdo.addText('待归档的一条');
   const done = await needdo.archive({ id: a.id });
   assert.equal(done.status, 'done');
+  assert.equal(done.count, 1);
   assert.equal((await needdo.list({ status: 'inbox' })).count, 0);
   const back = await needdo.archive({ id: a.id, undo: true });
   assert.equal(back.status, 'inbox');
+
+  // 批量：存在的归档、不存在的跳过并回报；全不存在时按 notFound 报
+  const b = await needdo.addText('批量第二条');
+  const c = await needdo.addText('批量第三条');
+  const batch = await needdo.archive({ ids: [b.id, c.id, 'nd_ghost'] });
+  assert.equal(batch.count, 2);
+  assert.deepEqual(batch.missing, ['nd_ghost']);
+  assert.equal((await needdo.list({ status: 'inbox' })).count, 1, '只剩被还原过的 a');
+  await assert.rejects(needdo.archive({ ids: ['nd_x', 'nd_y'] }), /没有这些条目/);
+});
+
+test('remove 批量：不连续选中的条目一个不误删，missing 回报', async () => {
+  freshEnv();
+  const ids = [];
+  for (const s of ['甲', '乙', '丙', '丁']) ids.push((await needdo.addText(s)).id);
+  // 删第 1、3 条（不连续）——下标式 splice 会把「乙」误带走，过滤重建不会
+  const r = await needdo.remove({ ids: [ids[0], ids[2]] });
+  assert.equal(r.removed, 2);
+  assert.deepEqual(r.ids, [ids[0], ids[2]]);
+  const left = await needdo.list({});
+  assert.deepEqual(
+    left.items.map((x) => x.title).sort(),
+    ['丁', '乙']
+  );
+  const r2 = await needdo.remove({ ids: [ids[1], 'nd_ghost'] });
+  assert.equal(r2.removed, 1);
+  assert.deepEqual(r2.missing, ['nd_ghost']);
+});
+
+test('process --ids：只整理指定条目，其余留在收件箱', async () => {
+  freshEnv();
+  const a = await needdo.addText('记得还书');
+  const b = await needdo.addText('随便一条不动的');
+
+  const r = await needdo.process({ ids: [a.id] });
+  assert.equal(r.processed, 1);
+  assert.equal((await needdo.list({ status: 'done' })).count, 1);
+  assert.equal((await needdo.list({ status: 'inbox' })).count, 1);
+
+  // 归档条目不能被再次整理（即使 id 被点名）
+  const r2 = await needdo.process({ ids: [a.id, b.id] });
+  assert.equal(r2.processed, 1);
+});
+
+test('fileData：原件以 base64 过境，路径与尺寸一并返回', async () => {
+  freshEnv();
+  const f = await needdo.addFileData('b.md', Buffer.from('# 一份原件\n正文内容'));
+  const r = await needdo.fileData({ id: f.id });
+  assert.equal(r.ext, 'md');
+  assert.ok(Buffer.from(r.data, 'base64').equals(Buffer.from('# 一份原件\n正文内容')));
+  assert.ok(r.path.endsWith(f.file));
+  await assert.rejects(needdo.fileData({ id: 'nd_nope' }), /没有这条条目/);
+  const t = await needdo.addText('文字条目没有原件');
+  await assert.rejects(needdo.fileData({ id: t.id }), /没有原件/);
 });
 
 test('normalizeNeeddo：坏条目丢弃、合法条目补默认值（老 store 缺 needdo 键 → items: []）', async () => {

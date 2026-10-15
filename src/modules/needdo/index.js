@@ -112,33 +112,60 @@ export default {
       id: 'needdo.archive',
       cli: [['needdo', 'archive']],
       http: ['POST', '/api/needdo/archive'],
-      summary: '归档一条条目（移出收件箱视野，数据保留）；--undo 还原回收件箱',
+      summary: '归档条目（移出收件箱视野，数据保留）；--undo 还原；--ids 批量（逗号分隔）',
+      args: [{ name: 'id', required: false }],
+      flags: { undo: { type: 'boolean' }, ids: { type: 'array', hint: '批量归档/还原这些条目' } },
+      run: (ctx) => service.archive({ id: ctx.id, ids: ctx.ids, undo: ctx.undo }),
+      render: (r) =>
+        [
+          r.status === 'done' ? `已归档 ${r.count} 条` : `已还原 ${r.count} 条`,
+          r.missing && r.missing.length ? `  跳过（不存在）: ${r.missing.join(', ')}` : null,
+        ]
+          .filter(Boolean)
+          .join('\n'),
+    },
+    {
+      id: 'needdo.file',
+      cli: [['needdo', 'file']],
+      http: ['GET', '/api/needdo/file'],
+      summary: '取一条文件条目的原件（CLI 打印路径与尺寸；面板用同一接口以 base64 过境下载）',
       args: [{ name: 'id' }],
-      flags: { undo: { type: 'boolean' } },
-      run: (ctx) => service.archive({ id: ctx.id, undo: ctx.undo }),
-      render: (r) => (r.status === 'done' ? `已归档: ${r.id}` : `已还原到收件箱: ${r.id}`),
+      run: (ctx) => service.fileData({ id: ctx.id }),
+      render: (r) =>
+        [
+          `原件: ${r.name}`,
+          `  类型   ${(r.ext || '').toUpperCase()} · ${(r.size / 1024).toFixed(1)}KB`,
+          `  位置   ${r.path}`,
+        ].join('\n'),
     },
     {
       id: 'needdo.remove',
       cli: [['needdo', 'remove'], ['needdo', 'rm']],
       http: ['POST', '/api/needdo/remove'],
-      summary: '删一条条目（连同它的原件与提取文本）；--all 清空收件箱（整理报告不受影响）',
+      summary:
+        '删条目（连同原件与提取文本）：单条给 <id>、批量给 --ids a,b、--all 清空收件箱（整理报告不受影响）',
       args: [{ name: 'id', required: false }],
-      flags: { all: { type: 'boolean' } },
-      run: (ctx) => service.remove({ id: ctx.id, all: ctx.all }),
+      flags: { all: { type: 'boolean' }, ids: { type: 'array', hint: '批量删除这些条目' } },
+      run: (ctx) => service.remove({ id: ctx.id, ids: ctx.ids, all: ctx.all }),
       render: (r) =>
-        r.removed > 1
-          ? `已清空收件箱（${r.removed} 条）`
-          : `已移除: ${r.ids[0]}`,
+        [
+          r.removed > 1 ? `已删除 ${r.removed} 条` : `已删除: ${r.ids[0] || '(无)'}`,
+          r.missing && r.missing.length ? `跳过（不存在）: ${r.missing.join(', ')}` : null,
+        ]
+          .filter(Boolean)
+          .join('\n'),
     },
     {
       id: 'needdo.process',
       cli: [['needdo', 'process']],
       http: ['POST', '/api/needdo/process'],
       summary:
-        '整理收件箱：按主题归类（待办/公告/文档/链接/杂项）、写整理报告并归档条目；--agent 预留 AI 整理接入点',
-      flags: { agent: { type: 'string', hint: 'agent 名（记录在案；AI 深度整理待接入）' } },
-      run: (ctx) => service.process({ agent: ctx.agent }),
+        '整理收件箱：按主题归类（待办/公告/文档/链接/杂项）、写整理报告并归档条目；--ids 只整理指定条目；--agent 预留 AI 整理接入点',
+      flags: {
+        agent: { type: 'string', hint: 'agent 名（记录在案；AI 深度整理待接入）' },
+        ids: { type: 'array', hint: '只整理这些条目（逗号分隔）' },
+      },
+      run: (ctx) => service.process({ agent: ctx.agent, ids: ctx.ids }),
       render: (r) => {
         if (!r.processed) return `收件箱已是空的（没有待整理条目）—— 收点东西进来：${hint('needdo add <text>')}`;
         const lines = [
