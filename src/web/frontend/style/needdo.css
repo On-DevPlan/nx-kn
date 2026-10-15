@@ -1,0 +1,32 @@
+/* 策略：NeedDo 收件箱（纸上规范）。捕获框是一张便签：柔和底 + 内凹阴影
+   （写字的凹陷感），聚焦时转正底、边框转墨色——「正在写」要有可感知的变化。 */
+.needdo-body { padding: 10px 12px; }
+
+.needdo-input {
+  display: block;
+  width: 100%;
+  min-height: 72px;
+  resize: vertical;
+  padding: 8px 10px;
+  border: 1px solid var(--soft-2);
+  border-radius: 0;
+  background: var(--soft);
+  box-shadow: var(--shadow-relief-inset);
+  font: inherit;
+  font-size: var(--fs-core);
+  color: var(--ink);
+}
+.needdo-input:focus {
+  outline: none;
+  border-color: var(--ink);
+  background: var(--paper);
+}
+.needdo-input::placeholder { color: var(--mid); }
+
+/* 拖放激活态：卡片书口虚线化 + 微微下沉，告诉用户「松手就收进来」。
+   card 策略的 outline 是实线书口，这里只换样式不动位置。 */
+.needdo-capture.drop { outline: 1.5px dashed var(--mid); background: var(--soft); }
+
+/* 键盘提示跟主按钮反方向排：操作在左，用法在右，视线不用跳。 */
+.needdo-tip { margin-left: auto; font-size: 11px; }
+.opt-actions:has(.needdo-tip) { flex-wrap: wrap; }

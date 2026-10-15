@@ -26,3 +26,4 @@ src/web/public/
 
 # Playwright MCP 调试产物（浏览器自动化临时日志/快照）
 .playwright-mcp/
+.claude/settings.local.json

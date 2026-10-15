@@ -13,6 +13,7 @@ import {
   APP_NAME,
   CRAWL_ENGINES,
   DEFAULT_CRAWL_ENGINE,
+  NEEDDO_FILE_EXTS,
   sourceDirOf,
   storePathFromEnv,
 } from './paths.js';
@@ -36,6 +37,10 @@ export function initialState() {
     // 每页的 url→{file,hash} 映射写在源目录内的 .nx-kn-crawl.json，
     // 不塞进 store（几百页的映射会让这个文件变得又大又吵）。
     crawl: { sources: [] },
+    // NeedDo 收件箱域（modules/needdo）：随手丢进来的文字/链接/文档条目。
+    // 条目元数据在这里，原件与提取文本落 needdoDir() 下的文件——与 crawl 的
+    // 「索引进 store、内容进文件」同一个分工。逐条校验见 normalizeNeeddo。
+    needdo: { items: [] },
   };
 }
 
@@ -169,7 +174,7 @@ export function normalize(data) {
 
   // 其余顶层键：base 里声明过的按 base 的形状兜底，没声明过的原样带过来
   for (const [k, v] of Object.entries(data)) {
-    if (k === 'version' || k === 'settings' || k === 'kb' || k === 'crawl') continue;
+    if (k === 'version' || k === 'settings' || k === 'kb' || k === 'crawl' || k === 'needdo') continue;
     if (Array.isArray(v)) {
       base[k] = v;
     } else if (v && typeof v === 'object') {
@@ -184,6 +189,7 @@ export function normalize(data) {
   // `vaults` 则永远拿不到值。所以迁移必须在这里做完。
   base.kb = normalizeKb(data.kb);
   base.crawl = normalizeCrawl(data.crawl);
+  base.needdo = normalizeNeeddo(data.needdo);
   return base;
 }
 
@@ -303,6 +309,54 @@ export function normalizeCrawl(raw) {
       if (!rec || seen.has(rec.name)) continue; // 按 name 去重（name 就是目录名）
       seen.add(rec.name);
       out.sources.push(rec);
+    }
+  }
+  return out;
+}
+
+// ---- NeedDo 收件箱域的结构化归一化 ----
+//
+// 一条收件箱条目。kind 三态：text（粘贴的文字）/ link（URL）/ file（上传的原件）。
+// file 条目的 content 只存摘录（提取文本的前几百字），全文在 needdoDir() 下的文件里——
+// store.json 是「条目清单」，不是文档仓库，塞全文会让每次读-改-写都搬运几 MB。
+function normalizeNeeddoItem(it) {
+  if (!it || typeof it !== 'object') return null;
+  const id = it.id ? String(it.id) : null;
+  if (!id) return null; // 无 id 的条目无法被 remove / open 定位，直接丢弃
+  const kind = ['text', 'link', 'file'].includes(it.kind) ? it.kind : 'text';
+  const ext = NEEDDO_FILE_EXTS.includes(it.ext) ? it.ext : null;
+  if (kind === 'file' && !ext) return null; // file 条目没有合法扩展名 = 无法解析，丢弃
+  // size 的空值陷阱：Number(null) 与 Number('') 都是 0，不是 NaN——
+  // 「没记录体积」会被归一化成「0 字节」。空值显式拦下，只认真正的数字。
+  const size = it.size === null || it.size === undefined || it.size === '' ? NaN : Number(it.size);
+  return {
+    id,
+    kind,
+    title: it.title ? String(it.title) : '',
+    content: typeof it.content === 'string' ? it.content : '',
+    excerpt: typeof it.excerpt === 'string' ? it.excerpt : '',
+    file: it.file ? String(it.file) : null,
+    textFile: it.textFile ? String(it.textFile) : null,
+    ext,
+    size: Number.isFinite(size) ? size : null,
+    topic: typeof it.topic === 'string' && it.topic ? it.topic : null,
+    status: it.status === 'done' ? 'done' : 'inbox',
+    agent: it.agent ? String(it.agent) : null,
+    addedAt: it.addedAt ? String(it.addedAt) : null,
+    processedAt: it.processedAt ? String(it.processedAt) : null,
+  };
+}
+
+export function normalizeNeeddo(raw) {
+  const src = raw && typeof raw === 'object' ? raw : {};
+  const out = { items: [] };
+  const seen = new Set();
+  if (Array.isArray(src.items)) {
+    for (const it of src.items) {
+      const rec = normalizeNeeddoItem(it);
+      if (!rec || seen.has(rec.id)) continue; // 按 id 去重
+      seen.add(rec.id);
+      out.items.push(rec);
     }
   }
   return out;
