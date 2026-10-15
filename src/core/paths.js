@@ -89,6 +89,19 @@ export const NEEDDO_FILE_EXTS = ['pdf', 'docx', 'txt', 'md'];
 // 请求体上限先卡着；这里再卡一道二进制口径（3MB ≈ base64 后 4MB），错误信息给得早。
 export const NEEDDO_FILE_MAX_BYTES = 3 * 1024 * 1024;
 
+// ---- 回收站（软删除）----
+//
+// 删除先进这里，而不是当场抹掉：收件箱里随手丢进来的东西往往**没有第二份**
+// （一段粘贴的文字、一个别人发来的 PDF），误删的代价远超留住它们的成本。
+// 原件用 rename 搬进 trash/（同一文件系统内是瞬时的），条目落 needdo.trash[]。
+// 淘汰两条规则同时生效，谁先到算谁：超过天数，或超过条数（按删除时间从旧到新丢）。
+export function needdoTrashDir() {
+  return join(needdoDir(), 'trash');
+}
+
+export const NEEDDO_TRASH_MAX_DAYS = 30;
+export const NEEDDO_TRASH_MAX_ITEMS = 200;
+
 // ---- 守护（watch）----
 //
 // 监听已登记的库，笔记一变就自动跑增量索引。这里只放「防抖窗口」这一个参数。

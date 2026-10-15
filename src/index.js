@@ -6,6 +6,9 @@ export * as errors from './core/errors/index.js';
 export * as home from './modules/home/service.js';
 export * as kb from './modules/kb/service.js';
 export * as crawl from './modules/crawl/service.js';
+// needdo（收件箱）也对外：库用方可以自己收条目、导简报、写回 AI 建议，
+// 不必复制一遍 ai 附注与 rev 指纹的规则（漏了这条 README 清单 #4 说「无断言」）。
+export * as needdo from './modules/needdo/service.js';
 
 // core/web.js 的纯函数（HTML→markdown、sitemap 解析、URL 归一）也对外导出：
 // 库用方想复用「抓一个页面并清洗」时不必自己重写一遍。

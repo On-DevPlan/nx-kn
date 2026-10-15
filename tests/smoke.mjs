@@ -345,8 +345,21 @@ test('needdo：文件条目落盘到数据目录 needdo/，删除时一并清理
   assert.equal(file.ext, 'md');
   assert.equal(Buffer.from(file.data, 'base64').toString('utf8'), '# 一份手记\n正文内容若干\n');
 
-  // 删除后：条目没了，盘上的文件也没了
+  // 删除 = 进回收站（软删除）：条目移出在册列表，原件搬进 needdo/trash/
   await run(`needdo remove --json ${added.item.id}`, env);
-  assert.ok(!existsSync(join(dataDir, added.item.file)), '删除条目要连原件一起清');
+  assert.ok(!existsSync(join(dataDir, added.item.file)), '在册目录里不该再有原件');
+  assert.ok(existsSync(join(dataDir, 'trash', added.item.file)), '原件应搬进回收站');
   assert.equal(JSON.parse((await run('needdo list --json', env)).stdout).total, 0);
+  assert.equal(JSON.parse((await run('needdo trash --json', env)).stdout).count, 1);
+
+  // 恢复回在册
+  await run(`needdo trash --json --ids ${added.item.id} --restore`, env);
+  assert.equal(JSON.parse((await run('needdo list --json', env)).stdout).total, 1);
+  assert.ok(existsSync(join(dataDir, added.item.file)), '恢复要把原件搬回来');
+
+  // 清空回收站才真删
+  await run(`needdo remove --json ${added.item.id}`, env);
+  const emptied = JSON.parse((await run('needdo trash --json --empty', env)).stdout);
+  assert.equal(emptied.emptied, 1);
+  assert.ok(!existsSync(join(dataDir, 'trash', added.item.file)), '清空后原件真的没了');
 });

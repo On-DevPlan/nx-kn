@@ -68,7 +68,35 @@ test('view.jsx 只 import 前端壳与 react（不拖 node 侧代码进浏览器
   }
 });
 
-// ---- 3. skill 文档提到的命令必须真实存在 ----
+// ---- 3. src/index.js 库入口的导出覆盖 ----
+// README 的「加一个功能域要碰哪几处」把这条标成「❗无断言」：新模块漏了
+// `export * as <域>` 时，库用方（外部工具 / agent）就拿不到 service，
+// 而且没有任何测试会红。这里把它补成有断言的：要么导出，要么写进下面的白名单
+// 并说明理由——「刻意不导出」和「忘了导出」必须能区分开。
+
+const UNEXPORTED_OK = new Set([
+  'settings', // 设置是「用户偏好」不是业务能力，没有拿它编程的场景
+]);
+
+test('src/index.js 导出每个业务域的 service（漏了库用方拿不到）', () => {
+  const src = readFileSync(join(ROOT, 'src', 'index.js'), 'utf8');
+  const dirs = readdirSync(join(ROOT, 'src', 'modules'), { withFileTypes: true })
+    .filter((d) => d.isDirectory())
+    .map((d) => d.name);
+
+  const missing = dirs.filter(
+    (m) => !UNEXPORTED_OK.has(m) && !src.includes(`'./modules/${m}/service.js'`)
+  );
+  assert.deepEqual(
+    missing,
+    [],
+    `以下模块没有在 src/index.js 导出 service：${missing.join(', ')}\n` +
+      `修复：加一行 export * as <域> from './modules/<域>/service.js'；` +
+      `若确实不该导出（不是业务能力），加进本文件的 UNEXPORTED_OK 并写清理由。`
+  );
+});
+
+// ---- 4. skill 文档提到的命令必须真实存在 ----
 // 文档是骨架的一部分：agent 只读 skill 文档，不会去猜命令名。文档里写了一条
 // 跑不了的命令，等价于「skill 装完之后这件事做不成」——而这正是流水线要保证的。
 // 这里用**真正的命令匹配器**（cli.js 的 resolveCommand）逐条解析，而不是做字符串

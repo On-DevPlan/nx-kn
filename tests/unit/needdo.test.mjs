@@ -117,9 +117,73 @@ test('list / show / remove：过滤与联动清理', async () => {
   await needdo.remove({ id: f.id });
   const after = await needdo.list({});
   assert.equal(after.total, 2);
-  assert.ok(!existsSync(join(envDir, 'needdo', f.file)), '条目删了，盘上的原件也要删');
+  // 软删除：原件搬进 trash/（不是删掉），清空回收站才真删
+  assert.ok(!existsSync(join(envDir, 'needdo', f.file)), '不在册条目的原件不该留在 needdo/ 下');
+  assert.ok(existsSync(join(envDir, 'needdo', 'trash', f.file)), '原件应搬进回收站');
 
   await assert.rejects(needdo.show({ id: f.id }), /没有这条条目/);
+});
+
+test('回收站：删除进回收站 → 恢复回在册 → 清空才真删', async () => {
+  freshEnv();
+  const a = await needdo.addText('待删的一条');
+  const f = await needdo.addFileData('x.md', Buffer.from('# 手记\n正文'));
+  assert.equal((await needdo.trash({})).count, 0);
+
+  const r = await needdo.remove({ ids: [a.id, f.id] });
+  assert.equal(r.removed, 2);
+  assert.equal(r.trashed, 2);
+  assert.equal((await needdo.list({})).total, 0, '不在册了');
+  assert.equal((await needdo.trash({})).count, 2);
+  assert.ok(existsSync(join(envDir, 'needdo', 'trash', f.file)));
+
+  const back = await needdo.trash({ ids: [a.id], restore: true });
+  assert.equal(back.restored, 1);
+  assert.equal((await needdo.list({})).total, 1);
+  assert.equal((await needdo.show({ id: a.id })).item.deletedAt, null, '恢复后不留删除痕迹');
+
+  // 恢复要指名；不存在的如实回报；全不存在时报错
+  await assert.rejects(needdo.trash({ restore: true }), /恢复要指名/);
+  const partial = await needdo.trash({ ids: [f.id, 'nd_ghost'], restore: true });
+  assert.equal(partial.restored, 1);
+  assert.deepEqual(partial.missing, ['nd_ghost']);
+  await assert.rejects(needdo.trash({ ids: ['nd_x'], restore: true }), /回收站里没有/);
+
+  // 清空：真删（含文件）
+  const f2 = await needdo.addFileData('y.md', Buffer.from('# 第二份\n内容'));
+  await needdo.remove({ id: f2.id });
+  const emptied = await needdo.trash({ empty: true });
+  assert.equal(emptied.emptied, 1);
+  assert.equal((await needdo.trash({})).count, 0);
+  assert.ok(!existsSync(join(envDir, 'needdo', 'trash', f2.file)), '清空后原件真的没了');
+});
+
+test('回收站淘汰：超期与超量同时生效，从旧到新丢', async () => {
+  freshEnv();
+  const { saveStore } = await import('../../src/core/store.js');
+  const old = new Date(Date.now() - 40 * 86400_000).toISOString(); // 40 天前 > 30 天上限
+  const now = new Date().toISOString();
+  const trash = [];
+  for (let i = 0; i < 205; i++) {
+    trash.push({
+      id: 'nd_t' + i,
+      kind: 'text',
+      title: 't' + i,
+      content: 'x',
+      status: 'inbox',
+      addedAt: now,
+      deletedAt: i < 5 ? old : now,
+    });
+  }
+  await saveStore({ needdo: { items: [], trash } });
+
+  // 触发一次写入即淘汰：5 条超期被丢，剩下的按 200 条上限再丢 1 条最旧的
+  const a = await needdo.addText('触发一次写入');
+  const r = await needdo.remove({ id: a.id });
+  assert.equal(r.evicted, 6, `5 条超期 + 1 条超量，实际 ${r.evicted}`);
+  const left = await needdo.trash({});
+  assert.equal(left.count, 200, '上限 200 条');
+  assert.ok(!left.items.some((x) => x.id.startsWith('nd_t0')), '最旧的先走');
 });
 
 test('process：主题分类、归档与整理报告', async () => {
@@ -230,11 +294,132 @@ test('normalizeNeeddo：坏条目丢弃、合法条目补默认值（老 store �
   assert.equal(out.items[1].id, 'nd_bad');
   assert.equal(out.items[1].kind, 'text');
 
-  const st = await loadStore(); // 全新 store：needdo 键自动补齐
-  assert.deepEqual(st.needdo, { items: [] });
+  const st = await loadStore(); // 全新 store：needdo 键自动补齐（含 round4 的回收站）
+  assert.deepEqual(st.needdo, { items: [], trash: [] });
 });
 
-// ---- agent 交接协议：brief → apply → review ----
+// ---- 编辑（round4）：改而不换身份，人定的主题锁得住 ----
+
+test('edit：改标题/正文不动身份字段；正文变了旧 AI 建议归回队列', async () => {
+  freshEnv();
+  const a = await needdo.addText('记得周三前提交报销单');
+  const before = (await needdo.show({ id: a.id })).item;
+
+  const r1 = await needdo.edit({ id: a.id, title: '报销单（已改标题）' });
+  assert.deepEqual(r1.changed, ['title']);
+  const afterTitle = (await needdo.show({ id: a.id })).item;
+  assert.equal(afterTitle.title, '报销单（已改标题）');
+  assert.equal(afterTitle.content, before.content, '改标题不动正文');
+  assert.equal(afterTitle.addedAt, before.addedAt, '改一条 ≠ 重新收一条');
+  assert.equal(afterTitle.status, 'inbox');
+  assert.ok(afterTitle.editedAt, '编辑痕迹要留下（归一化白名单得有 editedAt）');
+
+  // 正文改了：摘录与夹链接要重算
+  const r2 = await needdo.edit({ id: a.id, body: '新正文 见 https://a.com/x' });
+  assert.deepEqual(r2.changed, ['body']);
+  const afterBody = (await needdo.show({ id: a.id })).item;
+  assert.equal(afterBody.excerpt, '新正文 见 https://a.com/x');
+  assert.deepEqual(afterBody.links, ['https://a.com/x']);
+  assert.equal(afterBody.addedAt, before.addedAt, '身份字段依然不动');
+
+  await assert.rejects(needdo.edit({ id: a.id }), /至少给一个/);
+  await assert.rejects(needdo.edit({ id: a.id, title: '   ' }), /不能改成空的/);
+  await assert.rejects(needdo.edit({ id: 'nd_nope', title: 'x' }), /没有这条条目/);
+});
+
+test('edit：链接条目的正文必须是 URL；文件条目改不了正文', async () => {
+  freshEnv();
+  const l = await needdo.addLink('https://example.com/a');
+  await assert.rejects(needdo.edit({ id: l.id, body: '不是网址' }), /http/);
+
+  // 标题是当初从 URL 推出来的 → 跟着更新；用户自定义过的不碰
+  const r = await needdo.edit({ id: l.id, body: 'https://example.com/b' });
+  assert.equal(r.item.title, 'example.com/b');
+  await needdo.edit({ id: l.id, title: '我的收藏' });
+  const r2 = await needdo.edit({ id: l.id, body: 'https://example.com/c' });
+  assert.equal(r2.item.title, '我的收藏', '人写过的标题不许被地址变更带走');
+
+  const f = await needdo.addFileData('x.md', Buffer.from('# 一份手记\n内容'));
+  await assert.rejects(needdo.edit({ id: f.id, body: '改正文' }), /文件条目改不了正文/);
+  const rf = await needdo.edit({ id: f.id, topic: '文档资料' });
+  assert.equal(rf.item.topic, '文档资料', '文件条目能改主题');
+});
+
+test('人定的主题锁得住：process 与 review 都不覆盖 topicSource=user', async () => {
+  freshEnv();
+  const a = await needdo.addText('记得周三前提交报销单');
+  await needdo.edit({ id: a.id, topic: '我自己定的主题' });
+
+  // 规则表不覆盖（仍归档，但分类让位给人的判断）
+  await needdo.process({ level: 1 });
+  const afterProcess = (await needdo.show({ id: a.id })).item;
+  assert.equal(afterProcess.topic, '我自己定的主题');
+  assert.equal(afterProcess.topicSource, 'user');
+  assert.equal(afterProcess.status, 'done', '归档是状态流转，不受主题保护影响');
+
+  // AI 建议接受也不覆盖：状态收了，主题不动，且要如实回报
+  const br = await needdo.brief({ level: 1 });
+  await needdo.apply({
+    plan: { batchId: br.batchId, results: [{ id: a.id, rev: br.items[0].rev, topic: '公告通知' }] },
+  });
+  const rv = await needdo.review({ ids: [a.id] });
+  assert.equal(rv.accepted, 1);
+  assert.deepEqual(rv.protected, [a.id], '被保护的主题要单独回报，不能悄悄算作已应用');
+  const after = (await needdo.show({ id: a.id })).item;
+  assert.equal(after.topic, '我自己定的主题', '人显式定的主题永不被 AI 覆盖');
+  assert.equal(after.topicSource, 'user');
+  assert.equal(after.ai.status, 'accepted');
+});
+
+test('review：建议过期（rev 不符）不许接受', async () => {
+  freshEnv();
+  const a = await needdo.addText('记得交周报');
+  await needdo.process({ level: 1 });
+  const br = await needdo.brief({ level: 1 });
+  await needdo.apply({
+    plan: { batchId: br.batchId, results: [{ id: a.id, rev: br.items[0].rev, topic: '公告通知' }] },
+  });
+  // 建议生成之后，正文被改 → 指纹变了，那条建议就是针对旧内容的
+  await needdo.edit({ id: a.id, body: '正文整个换掉了' });
+
+  await assert.rejects(needdo.review({ ids: [a.id] }), /没有可复核的 AI 建议|已过期/);
+  const after = (await needdo.show({ id: a.id })).item;
+  assert.equal(after.ai.status, 'pending', '正文改了 → 旧建议作废、归回队列');
+  assert.notEqual(after.topic, '公告通知', '过期建议不许生效');
+});
+
+// ---- 检索（round4）：一个词就是全文入口 ----
+
+test('list 检索：q 命中标题/正文/主题/夹链接；--deep 才搜文档提取文本', async () => {
+  freshEnv();
+  await needdo.addText('下周团建报名，交给行政');
+  await needdo.addLink('https://example.com/weekly-report');
+  // 文档正文故意写长：摘录只存前 200 字，把关键词放在**摘录之外**，
+  // 这样「默认搜不到、--deep 才搜到」才是真的在测深搜边界。
+  const longBody = '# 排期表\n' + '前面的铺垫内容。'.repeat(40) + '\n关键节点在文末。';
+  await needdo.addFileData('排期.md', Buffer.from(longBody));
+
+  assert.equal((await needdo.list({ q: '团建' })).count, 1);
+  assert.equal((await needdo.list({ q: 'weekly' })).count, 1, '链接正文可搜');
+  assert.equal((await needdo.list({ q: '排期表' })).count, 1, '标题可搜');
+  assert.equal((await needdo.list({ q: '铺垫' })).count, 1, '摘录范围内的正文默认就能搜到');
+
+  // 摘录之外（约第 200 字以后）的内容：默认不搜，--deep 才读盘搜
+  assert.equal((await needdo.list({ q: '关键节点' })).count, 0);
+  assert.equal((await needdo.list({ q: '关键节点', deep: true })).count, 1);
+  assert.ok((await needdo.list({ q: '关键节点', deep: true })).deep);
+
+  // 组合过滤 + 限流
+  await needdo.process({});
+  await needdo.addText('团建第二条：确认人数');
+  const inboxHit = await needdo.list({ q: '团建', status: 'inbox' });
+  assert.equal(inboxHit.count, 1);
+  const limited = await needdo.list({ limit: 2 });
+  assert.equal(limited.count, 2);
+  assert.equal(limited.matched, 4, '限流前的匹配数要报出来');
+  assert.equal((await needdo.list({ kind: 'link' })).count, 1);
+  assert.equal((await needdo.list({ q: '不存在的词' })).count, 0);
+});
 
 test('process --enhance-level：0 是纯规则（不挂 ai），≥1 把条目排进 AI 队列', async () => {
   freshEnv();
@@ -315,7 +500,7 @@ test('brief → apply → review：AI 建议三步闭环，建议绝不覆盖确
   assert.equal(acceptedB.topicSource, 'rule');
 
   // 复核过的不能再复核（已经不是 suggested 了）
-  await assert.rejects(needdo.review({ ids: [a.id] }), /没有待复核/);
+  await assert.rejects(needdo.review({ ids: [a.id] }), /没有可复核的 AI 建议/);
 });
 
 test('apply：过期（rev 不符）跳过、不存在回报、全无有效结果时报错', async () => {
@@ -365,6 +550,14 @@ test('brief：默认跳过已有建议的，--redo 才带上（重跑不重复�
   assert.equal((await needdo.brief({ level: 1 })).count, 0, '已有建议（suggested）的不再默认导出');
   assert.equal((await needdo.brief({ level: 1, redo: true })).count, 1, '--redo 才重跑');
   assert.equal((await needdo.brief({ ids: [a.id] })).count, 1, '--ids 直接点名不受默认过滤影响');
+
+  // 被拒绝的建议同样不再默认导出：人已经说过「不要」了，默认不该反复再问
+  // （想重开一轮就 --redo 或 --ids 点名——这是刻意的两道闸）。
+  await needdo.review({ id: a.id, reject: true });
+  assert.equal((await needdo.brief({ level: 1 })).count, 0, 'rejected 也不默认导出');
+  assert.equal((await needdo.brief({ level: 1, redo: true })).count, 1);
+  assert.equal((await needdo.brief({ ids: [a.id] })).count, 1);
+
   await assert.rejects(needdo.brief({ level: 0 }), /至少是 1/);
 });
 
@@ -383,6 +576,22 @@ test('review --reject：只清状态，不碰主题', async () => {
   assert.equal(after.ai.status, 'rejected');
   assert.equal(after.topic, '待办事项', '拒绝的建议不许影响规则主题');
   assert.equal(after.topicSource, 'rule');
+
+  // 重放同一份计划**不许**把已拒绝的建议又提上来（那是覆盖人的决定）
+  const replay = await needdo.apply({
+    plan: { batchId: br.batchId, results: [{ id: a.id, rev: br.items[0].rev, topic: '公告通知' }] },
+  });
+  assert.equal(replay.applied, 0);
+  assert.equal(replay.unchanged, 1);
+  assert.equal((await needdo.show({ id: a.id })).item.ai.status, 'rejected', '拒绝的决定要被保住');
+
+  // 新一批 brief（新 batchId）才能重新提建议——重新问一轮是刻意的动作
+  const br2 = await needdo.brief({ level: 1, redo: true });
+  const reAp = await needdo.apply({
+    plan: { batchId: br2.batchId, results: [{ id: a.id, rev: br2.items[0].rev, topic: '公告通知' }] },
+  });
+  assert.equal(reAp.applied, 1, '换一批就该重开一轮');
+  assert.equal((await needdo.show({ id: a.id })).item.ai.status, 'suggested');
 });
 
 test('apply --plan <路径>：CLI 通道从文件读计划', async () => {

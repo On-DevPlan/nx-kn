@@ -12,7 +12,10 @@ import { basename, join } from 'node:path';
 import {
   NEEDDO_FILE_EXTS,
   NEEDDO_FILE_MAX_BYTES,
+  NEEDDO_TRASH_MAX_DAYS,
+  NEEDDO_TRASH_MAX_ITEMS,
   needdoDir,
+  needdoTrashDir,
 } from '../../core/paths.js';
 import { loadStore, mutateStore, newId } from '../../core/store.js';
 import { badInput, notFound } from '../../core/errors/index.js';
@@ -178,16 +181,64 @@ function itemsOf(store) {
   return store.needdo.items;
 }
 
-export async function list({ status, topic } = {}) {
+// 主题词表：规则表可能产出的全部主题 + 「未整理」的占位。导出来给 --topic 的枚举
+// 与面板下拉共用——手写第二份清单迟早与 classifyTopic 分叉。
+export const TOPICS = ['待办事项', '公告通知', '文档资料', '链接收藏', '杂项收集'];
+
+function matchesQuery(item, needle) {
+  const hay = [item.title, item.excerpt, item.content, item.topic || '', ...(item.links || [])]
+    .join('\n')
+    .toLowerCase();
+  return hay.includes(needle);
+}
+
+// 列条目。默认全部（新→旧），--status/--topic/--kind 过滤，`[q]` 是**全文入口**
+// （不加语法：就一个词，命中标题/摘录/正文/主题/夹链接）。
+// --deep 才去读文件条目的提取文本——那是读盘，代价高，只在你明确要时付。
+export async function list({ status, topic, kind, q, limit, deep } = {}) {
   const store = await loadStore();
   const all = itemsOf(store);
-  let items = all.slice().sort((a, b) => String(b.addedAt).localeCompare(String(a.addedAt)));
+  let items = all
+    .slice()
+    .sort((a, b) => String(b.addedAt).localeCompare(String(a.addedAt)));
   if (status) items = items.filter((x) => x.status === status);
   if (topic) items = items.filter((x) => x.topic === topic);
+  if (kind) items = items.filter((x) => x.kind === kind);
+
+  const needle = q == null ? '' : String(q).trim().toLowerCase();
+  if (needle) {
+    const hits = [];
+    for (const it of items) {
+      if (matchesQuery(it, needle)) {
+        hits.push(it);
+        continue;
+      }
+      if (deep && it.kind === 'file') {
+        const text = await fullTextOf(it);
+        if (text && text.toLowerCase().includes(needle)) hits.push(it);
+      }
+    }
+    items = hits;
+  }
+
+  const n = Number(limit);
+  const matched = items.length;
+  if (Number.isFinite(n) && n > 0) items = items.slice(0, n);
+
   return {
     count: items.length,
+    matched, // 过滤（含检索）后、限流前的条数——截断了多少一眼可见
     total: all.length,
     inbox: all.filter((x) => x.status === 'inbox').length,
+    // 回收站条数随列表下发：面板要在「删除」旁边显示「回收站 N」入口，
+    // 再单开一个接口只为拿个数字不值当。
+    trash: store.needdo.trash.length,
+    q: needle || null,
+    deep: !!deep,
+    // 主题词表随列表下发：面板的编辑下拉要用它，而前端不许 import service.js
+    // （core/modules 的 Node 侧代码不能进浏览器包）。复制一份清单迟早与
+    // classifyTopic 分叉，让服务端说了算就没有第二份。
+    topics: TOPICS,
     items,
   };
 }
@@ -399,8 +450,12 @@ export async function apply({ plan, planPath, agent } = {}) {
         out.staleIds.push(item.id);
         continue;
       }
-      if (batchId && item.ai && item.ai.batchId === batchId && item.ai.status === 'suggested') {
-        out.unchanged++; // 同一份计划重放
+      // 幂等判据看**整个批次的痕迹**，不只看 suggested 态：同一份计划的条目
+      // 可能已经被人接受或拒绝过了（批次号还在 ai.batchId 上）。只看 suggested
+      // 会让「重放一份旧计划」把已采纳的建议打回待复核、把已拒绝的又提上来——
+      // 那是覆盖人的决定。要重新提建议就得用新一批 brief（新 batchId）。
+      if (batchId && item.ai && item.ai.batchId === batchId) {
+        out.unchanged++;
         continue;
       }
       item.ai = {
@@ -429,12 +484,18 @@ export async function apply({ plan, planPath, agent } = {}) {
 
 // 复核：接受（写 topic 并记 topicSource='ai'）或拒绝（只清状态）。
 // 只是标记「这条建议被人看过并拍板了」，不归档——归档仍归 process。
+//
+// 两道闸（都是 round4 补的）：
+//   ① 建议过期不许接受：`ai.rev` 与条目当前内容指纹不符，说明建议是针对旧内容做的
+//      （人改过正文 / 别人刚接受过另一份建议）——归入 stale 跳过，不硬写。
+//   ② 人显式定的主题不许被覆盖：`topicSource === 'user'` 时接受建议只改状态、
+//      不动 topic（kb 的 origin 同款语义：用户明确表达的永不被自动规则降级）。
 export async function review({ id, ids, reject } = {}) {
   const wanted = Array.isArray(ids) ? ids : ids ? [ids] : id ? [id] : [];
   if (!wanted.length) throw badInput('缺少条目 id（单个 id 或 ids 数组）');
   return mutateStore((store) => {
     const byId = new Map(itemsOf(store).map((x) => [x.id, x]));
-    const res = { accepted: 0, rejected: 0, noSuggestion: [], missing: [] };
+    const res = { accepted: 0, rejected: 0, protected: [], stale: [], noSuggestion: [], missing: [] };
     for (const wid of wanted.map(String)) {
       const item = byId.get(wid);
       if (!item) {
@@ -445,22 +506,98 @@ export async function review({ id, ids, reject } = {}) {
         res.noSuggestion.push(wid);
         continue;
       }
+      if (item.ai.rev && item.ai.rev !== revOf(item)) {
+        res.stale.push(wid); // 建议比内容旧
+        continue;
+      }
       if (reject) {
         item.ai.status = 'rejected';
         res.rejected++;
-      } else {
-        item.ai.status = 'accepted';
-        if (item.ai.topic) {
+        continue;
+      }
+      item.ai.status = 'accepted';
+      if (item.ai.topic) {
+        if (item.topicSource === 'user') {
+          res.protected.push(wid); // 状态收了，主题不动——人定过的主题优先
+        } else {
           item.topic = item.ai.topic;
           item.topicSource = 'ai'; // 来源留痕：这条主题是 AI 建议被人接受的，不是规则定的
         }
-        res.accepted++;
       }
+      res.accepted++;
     }
     if (!res.accepted && !res.rejected) {
-      throw notFound(`没有待复核的 AI 建议: ${[...res.noSuggestion, ...res.missing].join(', ')}`);
+      const blocked = [...res.stale, ...res.noSuggestion, ...res.missing];
+      throw notFound(
+        `没有可复核的 AI 建议: ${blocked.join(', ')}` +
+          (res.stale.length ? `（其中 ${res.stale.length} 条建议已过期——内容改过了，重新 brief 一版）` : '')
+      );
     }
     return res;
+  });
+}
+
+// 编辑：改标题 / 改主题 / 改正文。三条纪律：
+//   · **不动身份字段**：id / status / addedAt 都保持——「改一条」不是「重新收一条」，
+//     归档状态与入库时间不该因为改个字就重置（Gmail 改草稿也不刷新收件时间）。
+//   · **正文或标题一变，旧的 AI 建议就过期了**：把 `ai.status` 归回 'pending'
+//     （brief 默认会重新捞回来），而不是留一个 rev 对不上的 suggested。
+//   · **--topic 是人显式定的**：记 `topicSource: 'user'`，此后规则表与 AI 都不许覆盖它
+//     （这也正是 store 的白名单里一直有 'user' 却没人产出的那个值）。
+export async function edit({ id, title, topic, body } = {}) {
+  if (!id) throw badInput('缺少条目 id');
+  if (title == null && topic == null && body == null) {
+    throw badInput('没有要改的内容（--title / --topic / --body 至少给一个）');
+  }
+  const at = new Date().toISOString();
+  return mutateStore((store) => {
+    const item = itemsOf(store).find((x) => x.id === id);
+    if (!item) throw notFound(`没有这条条目: ${id}`);
+    const changed = [];
+
+    if (title != null) {
+      const t = String(title).trim();
+      if (!t) throw badInput('标题不能改成空的');
+      item.title = t.slice(0, 120);
+      changed.push('title');
+    }
+
+    if (topic != null) {
+      const t = String(topic).trim();
+      if (!t) throw badInput('主题不能改成空的');
+      item.topic = t;
+      item.topicSource = 'user';
+      changed.push('topic');
+    }
+
+    if (body != null) {
+      if (item.kind === 'file') {
+        throw badInput('文件条目改不了正文（原件在 needdo/ 下）——可以改标题或主题');
+      }
+      const b = String(body);
+      if (item.kind === 'link') {
+        const u = b.trim();
+        if (!/^https?:\/\//i.test(u)) throw badInput(`链接必须以 http(s) 开头: ${u}`);
+        // 标题若是当初从旧 URL 推出来的（用户没自定义过），跟着一起更新；
+        // 自定义过的标题不碰——那是人的表达，不该被地址变更带走。
+        const wasDerived = item.title === titleOf('link', item.content);
+        item.content = u;
+        item.excerpt = u;
+        if (wasDerived && title == null) item.title = titleOf('link', u);
+      } else {
+        if (!b.trim()) throw badInput('正文不能改成空的');
+        item.content = b;
+        item.excerpt = excerptOf(b);
+        item.links = extractLinks(b); // 正文变了，夹着的链接也要重抽
+      }
+      changed.push('body');
+    }
+
+    item.editedAt = at;
+    if ((changed.includes('body') || changed.includes('title')) && item.ai && item.ai.status !== 'pending') {
+      item.ai.status = 'pending';
+    }
+    return { item, changed };
   });
 }
 
@@ -479,8 +616,12 @@ export async function process({ agent, ids, level = 0 } = {}) {
   const result = await mutateStore((store) => {
     const pending = itemsOf(store).filter((x) => x.status === 'inbox' && (!wanted || wanted.has(x.id)));
     for (const it of pending) {
-      it.topic = classifyTopic(it);
-      it.topicSource = 'rule';
+      // 人显式定过的主题（topicSource='user'）不许被规则表覆盖——kb 的 origin 同款语义。
+      // 它仍然会被归档（归档是状态流转），只是分类结果让位给人的判断。
+      if (it.topicSource !== 'user') {
+        it.topic = classifyTopic(it);
+        it.topicSource = 'rule';
+      }
       it.status = 'done';
       it.processedAt = at.toISOString();
       if (agent) it.agent = String(agent);
@@ -577,16 +718,54 @@ export async function archive({ id, ids, undo } = {}) {
   });
 }
 
-// 移除：单条（id）、批量（ids）或全部（all）。条目关联的原件与提取文本一起清，
-// 但整理报告（processed/*.md）永不自动删——它是历史，不是收件箱的一部分。
-// 文件清理放在事务**之后**：mutateStore 的 fn 是同步的（抛错则不落盘），
-// 异步清文件混进去会让「半个事务」语义失效。
+// 淘汰：回收站里的条目按删除时间保留，超期或超量就从旧到新丢。
+// 返回被淘汰的条目（调用方据此真删文件）——淘汰规则写在写入路径上，
+// 不需要额外的清理任务。
+function evictTrash(store) {
+  const cutoff = Date.now() - NEEDDO_TRASH_MAX_DAYS * 86400_000;
+  const trash = store.needdo.trash.slice().sort((a, b) => String(b.deletedAt).localeCompare(String(a.deletedAt)));
+  const keep = [];
+  const evicted = [];
+  for (const it of trash) {
+    const t = Date.parse(it.deletedAt || '');
+    if (keep.length >= NEEDDO_TRASH_MAX_ITEMS || (Number.isFinite(t) && t < cutoff)) evicted.push(it);
+    else keep.push(it);
+  }
+  store.needdo.trash = keep;
+  return evicted;
+}
+
+// 在 needdo/ 与 needdo/trash/ 之间搬原件与提取文本。
+// 搬不动（文件被手动清走）不算失败——条目状态该走完，残缺的文件不该拦住它。
+async function moveFiles(items, toDir) {
+  if (!items.length) return;
+  const from = toDir === needdoTrashDir() ? needdoDir() : needdoTrashDir();
+  await fsp.mkdir(toDir, { recursive: true });
+  for (const it of items) {
+    for (const f of [it.file, it.textFile]) {
+      if (!f) continue;
+      try {
+        await fsp.rename(join(from, f), join(toDir, f));
+      } catch {
+        /* 文件不在原处：跳过，条目状态照走 */
+      }
+    }
+  }
+}
+
+// 移除 = 进回收站（**软删除**）。理由：收件箱里随手丢进来的东西常常没有第二份
+// （一段粘贴的文字、别人发来的一个 PDF），当场抹掉的代价远超留住它们。
+// 真删有两条路：`trash --empty`（立刻）、或超期/超量自动淘汰（见 evictTrash）。
 export async function remove({ id, ids, all } = {}) {
+  const at = new Date().toISOString();
   const result = await mutateStore((store) => {
     const items = itemsOf(store);
     if (all) {
       const gone = items.splice(0, items.length);
-      return { gone, removed: gone.length, ids: gone.map((x) => x.id), missing: [] };
+      if (!gone.length) return { gone: [], removed: 0, ids: [], missing: [], evicted: [] };
+      for (const it of gone) it.deletedAt = at;
+      store.needdo.trash.push(...gone);
+      return { gone, removed: gone.length, ids: gone.map((x) => x.id), missing: [], evicted: evictTrash(store) };
     }
     const wanted = Array.isArray(ids) ? ids : ids ? [ids] : id ? [id] : [];
     if (!wanted.length) throw badInput('缺少条目 id（单个 id、ids 数组或 --all）');
@@ -597,19 +776,68 @@ export async function remove({ id, ids, all } = {}) {
     // 过滤重建而不是按下标 splice：批量选中的条目在列表里不连续，
     // 「从首个命中处删 N 个」会把夹在中间的无辜条目一起带走。
     store.needdo.items = items.filter((x) => !goneIds.has(x.id));
+    for (const it of gone) it.deletedAt = at;
+    store.needdo.trash.push(...gone);
     return {
       gone,
       removed: gone.length,
       ids: gone.map((x) => x.id),
       missing: wanted.filter((x) => !goneIds.has(x)),
+      evicted: evictTrash(store),
     };
   });
-  await removeFiles(result.gone);
-  return { removed: result.removed, ids: result.ids, missing: result.missing };
+  await moveFiles(result.gone, needdoTrashDir());
+  await removeFiles(result.evicted, needdoTrashDir()); // 淘汰的才真删（文件在 trash/ 下）
+  return {
+    removed: result.removed,
+    ids: result.ids,
+    missing: result.missing,
+    trashed: result.removed,
+    evicted: result.evicted.length,
+  };
 }
 
-async function removeFiles(items) {
-  const dir = needdoDir();
+// 回收站：列 / 恢复 / 清空。一条 action 三个方向（照 archive --undo 的形状）。
+export async function trash({ ids, restore, empty } = {}) {
+  if (empty) {
+    const gone = await mutateStore((store) => store.needdo.trash.splice(0, store.needdo.trash.length));
+    await removeFiles(gone, needdoTrashDir());
+    return { emptied: gone.length, count: 0, items: [] };
+  }
+
+  if (restore) {
+    const wanted = Array.isArray(ids) ? ids : ids ? [ids] : [];
+    if (!wanted.length) throw badInput('恢复要指名条目：--ids a,b（先 needdo trash 看有哪些）');
+    const result = await mutateStore((store) => {
+      const wantedSet = new Set(wanted);
+      const back = store.needdo.trash.filter((x) => wantedSet.has(x.id));
+      if (!back.length) throw notFound(`回收站里没有这些条目: ${wanted.join(', ')}`);
+      const backIds = new Set(back.map((x) => x.id));
+      store.needdo.trash = store.needdo.trash.filter((x) => !backIds.has(x.id));
+      for (const it of back) it.deletedAt = null; // 回到在册：删除痕迹清掉
+      store.needdo.items.push(...back);
+      return { back, missing: wanted.filter((x) => !backIds.has(x)) };
+    });
+    await moveFiles(result.back, needdoDir());
+    return {
+      restored: result.back.length,
+      ids: result.back.map((x) => x.id),
+      missing: result.missing,
+      count: (await loadStore()).needdo.trash.length,
+      items: result.back,
+    };
+  }
+
+  const store = await loadStore();
+  const list = store.needdo.trash
+    .slice()
+    .sort((a, b) => String(b.deletedAt).localeCompare(String(a.deletedAt)));
+  return { count: list.length, items: list };
+}
+
+// 清条目关联的文件。目录必须显式给：回收站里的条目，文件在 trash/ 下，
+// 而默认目录是 needdo/ —— 找错目录会「以为删了，其实还在」（force:true 连报错都没有）。
+async function removeFiles(items, dir = needdoDir()) {
   for (const it of items) {
     for (const f of [it.file, it.textFile]) {
       if (!f) continue;

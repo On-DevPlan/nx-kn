@@ -6,7 +6,7 @@
 // 四种输入（粘贴文字 / 链接 / 本地文件 / 面板上传）收在一条 `needdo add` 里：
 // 收件箱的心智模型是「一个口子全收」，拆成四条命令反而逼用户先想清楚类型。
 import * as service from './service.js';
-import { APP_NAME } from '../../core/paths.js';
+import { APP_NAME, NEEDDO_TRASH_MAX_DAYS, NEEDDO_TRASH_MAX_ITEMS } from '../../core/paths.js';
 
 function hint(cmd) {
   return `${APP_NAME} ${cmd}`;
@@ -61,27 +61,45 @@ export default {
       id: 'needdo.list',
       cli: [['needdo', 'list']],
       http: ['GET', '/api/needdo/list'],
-      summary: '列出收件箱条目（默认全部；--status inbox|done、--topic 可过滤）',
+      summary:
+        '列出条目（默认全部）；[q] 是全文入口（标题/摘录/正文/主题/夹链接）；--status/--topic/--kind 过滤；--deep 连文档的提取文本一起搜',
+      args: [{ name: 'q', required: false, rest: true, hint: '要搜的词（可多词）' }],
       flags: {
         status: { type: 'string', enum: ['inbox', 'done'], hint: '按状态过滤' },
-        topic: { type: 'string', hint: '按主题过滤（待办事项/公告通知/文档资料/链接收藏/杂项收集）' },
+        topic: { type: 'string', enum: service.TOPICS, hint: '按主题过滤' },
+        kind: { type: 'string', enum: ['text', 'link', 'file'], hint: '按类型过滤' },
+        deep: { type: 'boolean', hint: '文件条目的提取文本也参与检索（读盘，慢）' },
+        limit: { type: 'number', hint: '最多返回多少条' },
       },
-      run: (ctx) => service.list({ status: ctx.status, topic: ctx.topic }),
+      run: (ctx) =>
+        service.list({
+          status: ctx.status,
+          topic: ctx.topic,
+          kind: ctx.kind,
+          q: Array.isArray(ctx.q) ? ctx.q.join(' ') : ctx.q,
+          deep: ctx.deep,
+          limit: ctx.limit,
+        }),
       render: (r) => {
         if (!r.count) {
+          if (r.q) return `没有匹配「${r.q}」的条目（共 ${r.total} 条${r.deep ? '' : '；文档全文没搜，加 --deep 试试'}）`;
           return r.total
             ? `过滤条件下没有条目（共 ${r.total} 条，收件箱 ${r.inbox}）`
             : `收件箱是空的 —— 丢一句话进来：${hint('needdo add 明天下午3点开会')}`;
         }
-        const filtered = r.status || r.topic ? `（过滤自 ${r.total} 条）` : '';
-        const lines = [`共 ${r.count} 条${filtered}（收件箱 ${r.inbox}）`, ''];
+        const parts = [];
+        if (r.q) parts.push(`匹配「${r.q}」`);
+        const scope = [`共 ${r.count} 条`, r.matched > r.count ? `（限流自 ${r.matched}）` : ''].join('');
+        parts.unshift(scope);
+        const lines = [`${parts.join('')}（收件箱 ${r.inbox}）`, ''];
         for (const it of r.items) {
           const time = String(it.addedAt || '').replace('T', ' ').slice(5, 16);
           lines.push(`  [${it.id}] ${kindLabel(it)} · ${it.title}`);
           lines.push(
             `      ${time} · ${statusLabel(it)}` +
-              (it.topic ? ` · ${it.topic}` : '') +
-              (it.size ? ` · ${(it.size / 1024).toFixed(1)}KB` : '')
+              (it.topic ? ` · ${it.topic}${it.topicSource === 'user' ? '(你定的)' : it.topicSource === 'ai' ? '(AI)' : ''}` : '') +
+              (it.size ? ` · ${(it.size / 1024).toFixed(1)}KB` : '') +
+              (it.editedAt ? ' · 改过' : '')
           );
           if (it.excerpt && it.excerpt !== it.title) lines.push(`      ${it.excerpt}`);
         }
@@ -119,6 +137,32 @@ export default {
       },
     },
     {
+      id: 'needdo.edit',
+      cli: [['needdo', 'edit']],
+      http: ['POST', '/api/needdo/edit'],
+      summary:
+        '改条目的标题 / 主题 / 正文（--topic 是你手定的，记 topicSource=user，此后规则与 AI 都不覆盖它；正文一变旧 AI 建议归回队列）',
+      args: [{ name: 'id' }],
+      flags: {
+        title: { type: 'string', hint: '新标题' },
+        topic: { type: 'string', hint: `新主题（标准值：${service.TOPICS.join(' / ')}；也可自定）` },
+        body: { type: 'string', hint: '新正文（文字/链接条目；文件条目改不了）' },
+      },
+      run: (ctx) => service.edit({ id: ctx.id, title: ctx.title, topic: ctx.topic, body: ctx.body }),
+      render: (r) => {
+        const label = { title: '标题', topic: '主题', body: '正文' };
+        const lines = [
+          `已改 [${r.item.id}] ${r.item.title}`,
+          `  改动   ${r.changed.map((c) => label[c]).join(' / ')}`,
+        ];
+        if (r.changed.includes('topic')) lines.push('  主题   ' + r.item.topic + '（来源记为你，规则与 AI 不再覆盖）');
+        if (r.item.ai && r.item.ai.status === 'pending' && (r.changed.includes('body') || r.changed.includes('title'))) {
+          lines.push(`  注意   正文/标题改了，旧的 AI 建议已过期并归回队列——重新 ${hint('needdo brief')} 一版`);
+        }
+        return lines.join('\n');
+      },
+    },
+    {
       id: 'needdo.archive',
       cli: [['needdo', 'archive']],
       http: ['POST', '/api/needdo/archive'],
@@ -153,17 +197,50 @@ export default {
       cli: [['needdo', 'remove'], ['needdo', 'rm']],
       http: ['POST', '/api/needdo/remove'],
       summary:
-        '删条目（连同原件与提取文本）：单条给 <id>、批量给 --ids a,b、--all 清空收件箱（整理报告不受影响）',
+        '移除条目（进回收站，不是立刻抹掉）：单条给 <id>、批量给 --ids a,b、--all 清空收件箱；原件与提取文本一起移进 trash/',
       args: [{ name: 'id', required: false }],
-      flags: { all: { type: 'boolean' }, ids: { type: 'array', hint: '批量删除这些条目' } },
+      flags: { all: { type: 'boolean' }, ids: { type: 'array', hint: '批量移除这些条目' } },
       run: (ctx) => service.remove({ id: ctx.id, ids: ctx.ids, all: ctx.all }),
-      render: (r) =>
-        [
-          r.removed > 1 ? `已删除 ${r.removed} 条` : `已删除: ${r.ids[0] || '(无)'}`,
-          r.missing && r.missing.length ? `跳过（不存在）: ${r.missing.join(', ')}` : null,
-        ]
-          .filter(Boolean)
-          .join('\n'),
+      render: (r) => {
+        const lines = [
+          r.removed > 1 ? `已移入回收站 ${r.removed} 条` : `已移入回收站: ${r.ids[0] || '(无)'}`,
+        ];
+        if (r.missing && r.missing.length) lines.push(`跳过（不存在）: ${r.missing.join(', ')}`);
+        if (r.evicted) lines.push(`回收站淘汰 ${r.evicted} 条（超期或超量）`);
+        if (r.removed) lines.push('', `要恢复：${hint('needdo trash --ids ' + (r.ids[0] || 'a,b') + ' --restore')}`);
+        return lines.join('\n');
+      },
+    },
+    {
+      id: 'needdo.trash',
+      cli: [['needdo', 'trash']],
+      http: ['POST', '/api/needdo/trash'],
+      summary:
+        '回收站：默认列出；--ids a,b --restore 恢复；--empty 清空（真删原件）。超期/超量会自动淘汰',
+      flags: {
+        ids: { type: 'array', hint: '要恢复的条目（逗号分隔）' },
+        restore: { type: 'boolean', hint: '把 --ids 指定的条目恢复回收件箱' },
+        empty: { type: 'boolean', hint: '清空回收站（不可恢复）' },
+      },
+      run: (ctx) => service.trash({ ids: ctx.ids, restore: ctx.restore, empty: ctx.empty }),
+      render: (r) => {
+        if (r.emptied !== undefined) return `已清空回收站（${r.emptied} 条，原件一并删除）`;
+        if (r.restored) {
+          return (
+            `已恢复 ${r.restored} 条: ${r.ids.join(', ')}` +
+            (r.missing && r.missing.length ? `\n  跳过（回收站里没有）: ${r.missing.join(', ')}` : '') +
+            `\n  回收站剩 ${r.count} 条`
+          );
+        }
+        if (!r.count) return `回收站是空的（删除的条目会先落这里，${NEEDDO_TRASH_MAX_DAYS} 天内可恢复）`;
+        const lines = [`回收站 ${r.count} 条（超 ${NEEDDO_TRASH_MAX_DAYS} 天或超 ${NEEDDO_TRASH_MAX_ITEMS} 条自动淘汰）`, ''];
+        for (const it of r.items) {
+          lines.push(`  [${it.id}] ${kindLabel(it)} · ${it.title}`);
+          lines.push(`      删于 ${String(it.deletedAt || '').replace('T', ' ').slice(0, 16)}`);
+        }
+        lines.push('', `恢复：${hint('needdo trash --ids <id> --restore')} · 清空：${hint('needdo trash --empty')}`);
+        return lines.join('\n');
+      },
     },
     {
       id: 'needdo.process',

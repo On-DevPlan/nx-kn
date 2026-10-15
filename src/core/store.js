@@ -40,7 +40,8 @@ export function initialState() {
     // NeedDo 收件箱域（modules/needdo）：随手丢进来的文字/链接/文档条目。
     // 条目元数据在这里，原件与提取文本落 needdoDir() 下的文件——与 crawl 的
     // 「索引进 store、内容进文件」同一个分工。逐条校验见 normalizeNeeddo。
-    needdo: { items: [] },
+    // trash 是回收站：删除先进这里（软删除），--empty 或超期才真删。
+    needdo: { items: [], trash: [] },
   };
 }
 
@@ -355,7 +356,12 @@ function normalizeNeeddoItem(it) {
     status: it.status === 'done' ? 'done' : 'inbox',
     agent: it.agent ? String(it.agent) : null,
     addedAt: it.addedAt ? String(it.addedAt) : null,
+    // editedAt 必须在白名单里：归一化是逐字段重建的，漏掉就等于「编辑痕迹被静默抹掉」
+    // （条目标题看着没变，但「这条改过」这件事丢了）。
+    editedAt: it.editedAt ? String(it.editedAt) : null,
     processedAt: it.processedAt ? String(it.processedAt) : null,
+    // 只有回收站里的条目有值；在册条目恒为 null（删除时写上，恢复时清掉）。
+    deletedAt: it.deletedAt ? String(it.deletedAt) : null,
   };
 }
 
@@ -389,7 +395,7 @@ function normalizeNeeddoAi(ai) {
 
 export function normalizeNeeddo(raw) {
   const src = raw && typeof raw === 'object' ? raw : {};
-  const out = { items: [] };
+  const out = { items: [], trash: [] };
   const seen = new Set();
   if (Array.isArray(src.items)) {
     for (const it of src.items) {
@@ -397,6 +403,16 @@ export function normalizeNeeddo(raw) {
       if (!rec || seen.has(rec.id)) continue; // 按 id 去重
       seen.add(rec.id);
       out.items.push(rec);
+    }
+  }
+  // 回收站与在册条目同一套逐字段校验（同一形状），只是多一个 deletedAt；
+  // id 去重跨两个列表一起算——同一条不该同时躺在两处。
+  if (Array.isArray(src.trash)) {
+    for (const it of src.trash) {
+      const rec = normalizeNeeddoItem(it);
+      if (!rec || seen.has(rec.id)) continue;
+      seen.add(rec.id);
+      out.trash.push(rec);
     }
   }
   return out;

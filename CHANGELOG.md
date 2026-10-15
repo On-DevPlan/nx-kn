@@ -4,6 +4,95 @@
 
 ## [Unreleased]
 
+### Added — `needdo` 收件箱：检索 / 编辑 / 回收站（round4）
+
+条目多起来之后的三件日常事——**找、改、撤**——各自补齐，顺手修了两处协议越权。
+
+**找**：`needdo list [q]` 多了一个位置参数，**一个词就是全文入口**（标题 / 摘录 / 正文 /
+主题 / 夹链接），刻意不做过滤语法（本地工具的规模感不需要 `tag:` `@label` 那一套）。
+`--kind text|link|file`、`--limit N` 与 `--deep`（连文档的提取正文一起搜——那是读盘，
+只在你明确要时付）。`--topic` 改成枚举，值取自 service 导出的 `TOPICS`；主题词表随
+list 响应一起下发，前端不再复制一份清单（复制就会与 `classifyTopic` 分叉）。
+面板上是一个搜索框 + 现成的 `<Highlight>` 标黄，命中数即时更新。
+
+**改**：`needdo edit <id> [--title] [--topic] [--body]`。三条纪律：**改一条不等于重新收一条**
+（`id`/`status`/`addedAt` 都不动，只写 `editedAt`——它必须进 store 白名单，否则编辑痕迹
+会被归一化静默抹掉）；**正文或标题一变，旧 AI 建议就作废**并归回 `ai.status='pending'`
+（brief 默认会重新捞回来），而不是留一个 `rev` 对不上的 `suggested`；**`--topic` 是人显式定的**，
+记 `topicSource: 'user'`——这个值在 store 白名单里躺了两轮却没有产出者，SKILL.md 却已经
+当既成事实写着，现在补上产出与保护。链接条目改正文会做 http(s) 校验，且只在标题仍是
+「从旧 URL 推出来的」时才跟着更新（人写过的标题不许被地址变更带走）。
+
+**撤**：删除改成**软删除**——条目落 `needdo.trash[]`，原件 `rename` 进 `needdo/trash/`；
+`needdo trash [--ids --restore] [--empty]` 一条 action 三个方向（照 `archive --undo` 的形状）。
+回收站在写入路径上自动淘汰：超 30 天或超 200 条，按删除时间从旧到新丢（不需要清理任务）。
+理由很直接：收件箱里随手丢进来的东西**常常没有第二份**（一段粘贴的文字、别人发来的 PDF），
+当场抹掉的代价远超留住它们的成本。面板的「删除」跟着改口径，并多了「回收站 N」入口与恢复/清空。
+
+**两处协议越权修复**（都先写成单测钉住）：
+
+- `review` 不看 `rev`：建议生成后条目被人改过，仍能接受那条**针对旧内容**的建议。
+  现在会归入 `stale` 拒绝（提示重新 brief），不再静默应用到已经变了的正文上。
+- `process` 与 `review` 无条件覆盖 `topic`：人用 `edit --topic` 定的主题会被规则表或
+  被接受的 AI 建议顶掉。现在 `topicSource === 'user'` 的条目，规则不覆盖、接受建议也只
+  改状态不动主题（并在结果里单列 `protected`，不冒充「已应用」）。
+
+**顺带**：`apply` 的幂等判据从「只看 `suggested`」放宽到「整个 batchId 的痕迹」——
+重放一份旧计划会把已接受/已拒绝的建议打回待复核，那是覆盖人的决定；要重开一轮必须换新批次。
+`removeFiles` 加了显式目录参数（回收站里的条目，文件在 `trash/` 下，按默认目录找会
+「以为删了其实还在」，`force: true` 连报错都没有）。`src/index.js` 导出 needdo service，
+并把「库入口漏导出」这条 README 里标着「❗无断言」的清单项补成 `consistency.test.mjs` 的断言。
+
+**测试**：needdo 单测 25 条（新增 edit 身份不变/链接与文件的边界、主题保护、建议过期、
+检索与 `--deep` 边界、回收站三方向与淘汰规则）+ smoke 的软删除与恢复全链路。
+
+### Added — `needdo` 收件箱：混乱输入 → 主题整理（含 agent 交接协议）
+
+**是什么**：随手丢进来的杂乱文字 / 公告 / 网址 / PDF·DOCX 文档收进一个收件箱
+（第 4 个 tab「NeedDo」），落盘到数据目录，按确定性规则归类并写 markdown 报告；
+需要 AI 参与时走**建议**而不是自动改主视图。
+
+**捕获期零 AI、零分类负担**。一条 `needdo add` 吃四种输入：位置参数收文字、`--link` 收网址、
+`--file <路径>` 收本地文档（CLI）/ `--data`+`--name` 走面板上传（base64 过境 JSON API，
+HTTP 层因此不用引 multipart）。整行是 URL 才当链接（判据在 `classify.js`，纯函数 + 单测——
+旧写法先删空白再判，`https://a.com 看一下` 会被整条误存成链接）；混排文字里夹的 URL
+**抽进 `links[]` 附挂**，原文一字不动（与 `links[]` 的 round2 惯例同形）。
+
+**文档解析零依赖**（`extract.js`）：DOCX = 自实现 zip 中央目录读取 + `zlib.inflateRaw` +
+剥 XML 标签；PDF = 扫 `stream…endstream`、能 inflate 的 inflate，再从内容流里抓
+`(…)Tj` / `[…]TJ` 字面量。**尽力而为**：加密 / 扫描件 / CID 字体提取不出就返回 null，
+原件照常落盘、条目照常入库——收件箱的第一承诺是「收进来」，文本化是加分项。
+原件与提取文本落 `<数据目录>/needdo/<id>.<ext>` 与 `<id>.txt`，元数据进 `needdo.items[]`。
+
+**整理是确定性的**：`process` 走有序规则表（待办 → 公告 → 文档 → 链接 → 杂项，**可执行的
+优先于可读的**：带「截止」的公告对收件箱主人来说是待办），写报告、条目归档（`inbox → done`
+二态，可逆）。规则产出的 `topic` 记 `topicSource: 'rule'`。
+
+**AI 只写附注，不覆盖确定性字段**（三条硬规则，先例分别来自 crawl 的 `--enhance-level`、
+kb 的 `origin`、round2 的 `links[]`）：
+
+- `process --enhance-level 0-3`：级别显式，默认 0 = 纯规则（离线、CI、可复现）；
+  非 0-3 直接报错不静默回落。≥1 时同时把条目排进 AI 队列（`ai.status='pending'`）
+- `needdo brief [--ids] [--level] [--redo]`：**一次拿全**的自足 JSON（全文含文件提取文本、
+  夹链接、规则预判主题 `ruleTopic`、8 位内容指纹 `rev`、该级别要做的 `task`）。
+  默认只导出还没被 AI 处理过的（不重复喂、不重复花钱），`--redo` 才含已有的
+- `needdo apply --plan <计划.json>`：**只追加 `ai` 段**，`content/title/topic/status`
+  一个都不动；幂等键 `(batchId, id, rev)`，重放 = no-op（含已接受/已拒绝的条目——
+  重放不许覆盖人的决定）；内容变过的归 `stale` 跳过并回报，全无有效结果才报错
+- `needdo review --ids a,b [--reject]`：**接受才生效**——写 `topic` 并记 `topicSource: 'ai'`；
+  拒绝只清状态。面板与 CLI 同源（行内徽标、详情里的 AI 附注块、多选批量复核）
+
+「建议而非静默应用」是调研里最硬的一条产品证据：Notion AI Autofill 明确非实时触发、
+Readwise 只自动处理手动保存的、Linear triage 由 goalie 拍板——**越靠近改动主视图结构的
+动作，越晚介入、越要人拍板**；静默应用只留在「垃圾桶类 + 可逆 + 误判代价低」的场景。
+
+**顺带修的两处 `Number(null) === 0` 陷阱**：`size`（「没记录体积」曾被归一化成 0 字节）
+与 `ai.confidence`（「没给置信度」在面板上显示成「置信 0」，看起来像 AI 很不确定）。
+`brief` 的 `rev` 把 `topic` 也算进指纹——别人刚接受过另一份建议同样算「动过」。
+
+**测试**：`tests/unit/needdo.test.mjs`（18 条：四通道入库、docx/pdf fixture 提取、批量不误删、
+协议三步闭环与幂等/stale/拒绝路径、looksLikeLink）+ smoke 两条 CLI 全链路。
+
 ### Added — 抓取产物与源库重叠时，默认只留一份参与检索（F8）
 
 **问题**：`crawl run` 会把产物目录自动登记为知识库，而**本地目录源**（典型是 Obsidian vault）

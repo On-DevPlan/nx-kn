@@ -58,6 +58,40 @@
 .needdo-detail-acts { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .needdo-detail-acts .needdo-tip { margin-left: 0; }
 
+/* 检索行：一条输入框 + 命中数 + 清空。发丝线起分隔，不抢卡头的层级。 */
+.needdo-searchrow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--soft-2);
+}
+.needdo-search {
+  flex: 1;
+  min-width: 0;
+  padding: 5px 8px;
+  border: 1px solid var(--soft-2);
+  border-radius: 0;
+  background: var(--soft);
+  font: inherit;
+  font-size: var(--fs-core);
+  color: var(--ink);
+}
+.needdo-search:focus { outline: none; border-color: var(--ink); background: var(--paper); }
+.needdo-search::placeholder { color: var(--mid); }
+
+/* AI 队列的出口提示：文案 + 一条可点击复制的命令。 */
+.needdo-queue {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--soft-2);
+  font-size: 11px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
 /* AI 附注块（详情里）：柔底 + 发丝框，与正文块同调——它是「意见」不是「正文」。 */
 .needdo-ai {
   display: flex;

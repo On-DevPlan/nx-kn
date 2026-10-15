@@ -12,10 +12,11 @@
 // round2 增补：条目详情 Modal（全文 + 夹链接可点 + 原件下载）、混排文字的
 // 「含链接」徽标、busy 守卫改 ref（修焦点在外粘贴的竞态）、checkbox 多选批量
 // （选中非空时卡头切换为「已选 N · 归档/还原 · 整理 · 删除」，Gmail/Linear 惯例）。
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { api } from '../../web/frontend/api/client.js';
 import { CliHints } from '../../web/frontend/components/CliHints.jsx';
-import { Copyable, Modal, Spinner, useDialog, useToast } from '../../web/frontend/components/ui.jsx';
+import { Copyable, Highlight, Modal, Spinner, useDialog, useToast } from '../../web/frontend/components/ui.jsx';
+import { useStore } from '../../web/frontend/store.jsx';
 import { looksLikeLink } from './classify.js';
 
 // 与 core/paths.js 的 NEEDDO_FILE_MAX_BYTES 同口径（HTTP body 4MB 上限的 base64 换算）。
@@ -63,13 +64,20 @@ function downloadBase64(name, b64) {
 export default function NeedDoView() {
   const toast = useToast();
   const { dialog, node: dialogNode } = useDialog();
+  // 过滤与检索词进 localStorage（store.jsx 的硬标准：刷新后不该丢的用户选择都要持久化）。
+  // 刻意**不进 URL**：App.jsx 的 hash 只承载 view，且那段 hash 同步有个未复现的跳转 bug。
+  const { ui, patchUi } = useStore();
+  const filter = ui.needdo?.filter || 'inbox'; // inbox | done | all —— 默认只看收件箱（铁律 4）
+  const q = ui.needdo?.q || '';
+  const setFilter = (f) => patchUi({ needdo: { filter: f, q } });
+  const setQ = (v) => patchUi({ needdo: { filter, q: v } });
 
   const [st, setSt] = useState(null);
   const [busy, setBusy] = useState(false);
   const [text, setText] = useState('');
   const [drag, setDrag] = useState(false);
-  const [filter, setFilter] = useState('inbox'); // inbox | done | all —— 默认只看收件箱（铁律 4）
   const [detail, setDetail] = useState(null); // { item, text } —— 详情 Modal 的内容
+  const [trash, setTrash] = useState(null); // 回收站弹层的内容（null = 关着）
   const [sel, setSel] = useState(() => new Set()); // 选中条目 id —— 非空时卡头切换批量条
   const inputRef = useRef(null);
   const fileRef = useRef(null);
@@ -184,14 +192,51 @@ export default function NeedDoView() {
   }
 
   async function processInbox() {
+    // 级别用下拉而不是固定 0：面板必须能表达「这次要不要让 AI 参与」——
+    // 但它只负责**排队**（AI 干活的是外部 agent，走 CLI 的 brief/apply）。
+    // 0 保持默认且语义清楚：离线、可复现、不调任何模型。
+    const r = await dialog({
+      title: '按主题整理',
+      message:
+        '先把收件箱按规则表归类并归档（待办事项 / 公告通知 / 文档资料 / 链接收藏 / 杂项收集），并写一份 markdown 报告。\n' +
+        '级别 ≥1 会把条目**排进 AI 复核队列**：之后用 CLI 跑 nx-kn needdo brief 把简报交给 agent，' +
+        '它给出的建议会先落成「待你复核」，你接受后才生效。',
+      fields: [
+        {
+          key: 'level',
+          label: 'AI 增强级别',
+          options: [
+            { value: '0', label: '0 · 纯规则（不调 AI，离线可跑）' },
+            { value: '1', label: '1 · 排队等 AI 复核主题' },
+            { value: '2', label: '2 · 再加一句话摘要' },
+            { value: '3', label: '3 · 再加标签' },
+          ],
+          value: '0',
+        },
+        { key: 'agent', label: 'agent 名（级别 ≥1 时记录在案，可留空）', placeholder: 'claude', value: '' },
+      ],
+      okText: '开始整理',
+    });
+    if (!r) return;
+    const level = Number(r.level) || 0;
     await withBusy(async () => {
-      const r = await api('/api/needdo/process', { method: 'POST', body: {} });
-      toast(
-        r.processed
-          ? `已整理 ${r.processed} 条：${r.byTopic.map((x) => `${x.topic} ${x.count}`).join(' / ')}`
-          : '收件箱已是空的'
-      );
-      await refresh();
+      try {
+        const out = await api('/api/needdo/process', {
+          method: 'POST',
+          body: { 'enhance-level': level, agent: r.agent || undefined },
+        });
+        toast(
+          out.processed
+            ? `已整理 ${out.processed} 条：${out.byTopic.map((x) => `${x.topic} ${x.count}`).join(' / ')}`
+            : '收件箱已是空的'
+        );
+        if (out.pendingAi) {
+          toast(`已排队等 AI 复核 ${out.pendingAi} 条 —— 见上方提示导出简报`);
+        }
+        await refresh();
+      } catch (e) {
+        toast(String(e.message || e));
+      }
     });
   }
 
@@ -204,15 +249,63 @@ export default function NeedDoView() {
 
   async function removeItem(it) {
     const ok = await dialog({
-      title: '删除条目',
-      message: `把 [${it.title}] 从收件箱删除？\n文件型条目的原件与提取文本会一起删掉，删除不可恢复。`,
-      okText: '删除',
+      title: '移到回收站',
+      message:
+        `把 [${it.title}] 移出收件箱？\n` +
+        '条目与原件会进回收站（不再出现在列表里），**30 天内可以恢复**；清空回收站才真删。',
+      okText: '移到回收站',
       danger: true,
     });
     if (!ok) return;
     await withBusy(async () => {
       await api('/api/needdo/remove', { method: 'POST', body: { id: it.id } });
+      toast('已移入回收站');
       await refresh();
+    });
+  }
+
+  // 回收站：列 + 恢复 + 清空。与 CLI 的 needdo trash 是同一 action 的三个方向。
+  async function openTrash() {
+    await withBusy(async () => {
+      try {
+        const r = await api('/api/needdo/trash', { method: 'POST', body: {} });
+        setTrash(r);
+      } catch (e) {
+        toast(String(e.message || e));
+      }
+    });
+  }
+
+  async function restoreItem(it) {
+    await withBusy(async () => {
+      try {
+        await api('/api/needdo/trash', { method: 'POST', body: { ids: [it.id], restore: true } });
+        toast('已恢复');
+        await refresh();
+        setTrash(await api('/api/needdo/trash', { method: 'POST', body: {} }));
+      } catch (e) {
+        toast(String(e.message || e));
+      }
+    });
+  }
+
+  async function emptyTrash() {
+    const ok = await dialog({
+      title: '清空回收站',
+      message: `彻底删除回收站里的 ${trash?.count || 0} 条？\n条目、原件与提取文本都会被真正删除，**不可恢复**。`,
+      okText: '清空',
+      danger: true,
+    });
+    if (!ok) return;
+    await withBusy(async () => {
+      try {
+        const r = await api('/api/needdo/trash', { method: 'POST', body: { empty: true } });
+        toast(`已清空回收站（${r.emptied} 条）`);
+        setTrash(null);
+        await refresh();
+      } catch (e) {
+        toast(String(e.message || e));
+      }
     });
   }
 
@@ -266,17 +359,70 @@ export default function NeedDoView() {
 
   async function batchDelete() {
     const ok = await dialog({
-      title: '批量删除',
-      message: `删除选中的 ${sel.size} 条？\n文件型条目的原件与提取文本会一起删掉，删除不可恢复。`,
-      okText: '删除',
+      title: '批量移到回收站',
+      message:
+        `把选中的 ${sel.size} 条移出收件箱？\n条目与原件会进回收站（30 天内可恢复）；清空回收站才真删。`,
+      okText: '移到回收站',
       danger: true,
     });
     if (!ok) return;
     await withBusy(async () => {
       const r = await api('/api/needdo/remove', { method: 'POST', body: { ids: [...sel] } });
-      toast(`已删除 ${r.removed} 条${r.missing && r.missing.length ? `（跳过 ${r.missing.length} 条已不存在的）` : ''}`);
+      toast(`已移入回收站 ${r.removed} 条${r.missing && r.missing.length ? `（跳过 ${r.missing.length} 条已不存在的）` : ''}`);
       clearSel();
       await refresh();
+    });
+  }
+
+  // 编辑：只发**真正改动过**的字段。弹窗会把当前值预填，若无脑整份提交，
+  // 「只想改主题」也会算成改了正文——那会让 editedAt 被写上、旧 AI 建议被误作废。
+  async function editItem(it) {
+    const topicOptions = [...new Set([...(it.topic ? [it.topic] : []), ...(st?.topics || [])])];
+    const fields = [
+      { key: 'title', label: '标题', value: it.title },
+      {
+        key: 'topic',
+        label: '主题（在这里选的值会记成「你定的」，规则表与 AI 之后都不覆盖）',
+        options: ['(不改)', ...topicOptions],
+        value: it.topic || '(不改)',
+      },
+    ];
+    if (it.kind !== 'file') {
+      fields.push({
+        key: 'body',
+        label: it.kind === 'link' ? '网址（须 http(s) 开头）' : '正文',
+        value: it.content,
+      });
+    }
+    const r = await dialog({
+      title: `改条目 · ${it.title.slice(0, 40)}`,
+      message:
+        '改一条不等于重新收一条：入库时间与归档状态都保持。\n' +
+        (it.kind === 'file' ? '文件条目的正文是提取出来的（原件在数据目录里），这里只能改标题与主题。' : ''),
+      fields,
+      okText: '保存',
+    });
+    if (!r) return;
+
+    const patch = {};
+    if (r.title !== it.title) patch.title = r.title;
+    if (r.topic !== '(不改)' && r.topic !== (it.topic || '')) patch.topic = r.topic;
+    if (it.kind !== 'file' && r.body !== it.content) patch.body = r.body;
+    if (!Object.keys(patch).length) {
+      toast('没有改动');
+      return;
+    }
+    await withBusy(async () => {
+      try {
+        await api('/api/needdo/edit', { method: 'POST', body: { id: it.id, ...patch } });
+        toast('已保存');
+        await refresh();
+        if (detail && detail.item.id === it.id) {
+          setDetail(await api('/api/needdo/show?id=' + encodeURIComponent(it.id)));
+        }
+      } catch (e) {
+        toast(String(e.message || e));
+      }
     });
   }
 
@@ -337,10 +483,31 @@ export default function NeedDoView() {
     if (files.length) uploadFiles(files);
   };
 
-  const items = st ? st.items.filter((x) => (filter === 'all' ? true : x.status === filter)) : [];
+  const items = useMemo(() => {
+    if (!st) return [];
+    const needle = q.trim().toLowerCase();
+    return st.items
+      .filter((x) => (filter === 'all' ? true : x.status === filter))
+      .filter(
+        (x) =>
+          !needle ||
+          [x.title, x.excerpt, x.content, x.topic || '', ...(x.links || [])]
+            .join('\n')
+            .toLowerCase()
+            .includes(needle)
+      );
+  }, [st, filter, q]);
   const selItems = items.filter((x) => sel.has(x.id));
   const anySuggestion = selItems.some((x) => x.ai && x.ai.status === 'suggested');
   const loading = st === null;
+  const needle = q.trim();
+
+  // AI 队列的可见性：条目标上的「待 AI」徽标只在列表里可见，卡头得能一眼看出
+  // 「还有多少条等着 agent 过」。级别取队列里的最大值——那一级才是这次要跑的任务。
+  const aiPending = st ? st.items.filter((x) => x.ai && x.ai.status === 'pending') : [];
+  const aiSuggestedCount = st ? st.items.filter((x) => x.ai && x.ai.status === 'suggested').length : 0;
+  const aiLevel = aiPending.length ? Math.max(...aiPending.map((x) => x.ai.level || 1)) : 1;
+  const briefCmd = `nx-kn needdo brief --level ${aiLevel} --json > brief.json`;
 
   return (
     <div
@@ -351,6 +518,37 @@ export default function NeedDoView() {
       onDrop={onDrop}
     >
       {dialogNode}
+      {trash && (
+        <Modal title={`回收站（${trash.count} 条 · 30 天内可恢复）`} onClose={() => setTrash(null)}>
+          <div className="needdo-detail">
+            {!trash.count ? (
+              <div className="empty">回收站是空的</div>
+            ) : (
+              trash.items.map((it) => (
+                <div className="row wrap" key={it.id}>
+                  <div className="name mono" title={it.title}>
+                    [{kindLabel(it)}] {it.title}
+                  </div>
+                  <div className="acts">
+                    <span className="muted">删于 {fmtTime(it.deletedAt)}</span>
+                    <button className="btn small ghost" disabled={busy} onClick={() => restoreItem(it)}>
+                      恢复
+                    </button>
+                  </div>
+                </div>
+              ))
+            )}
+            <div className="needdo-detail-acts">
+              <button className="btn ghost" disabled={busy || !trash.count} onClick={emptyTrash}>
+                清空回收站
+              </button>
+              <span className="muted needdo-tip">
+                清空会把原件与提取文本一并真删；超 30 天或超 200 条也会自动淘汰
+              </span>
+            </div>
+          </div>
+        </Modal>
+      )}
       {detail && (
         <Modal title={detail.item.title || '(无标题)'} onClose={() => setDetail(null)}>
           <div className="needdo-detail">
@@ -429,7 +627,17 @@ export default function NeedDoView() {
       <div className={'card needdo-capture' + (drag ? ' drop' : '')}>
         <div className="colhead">
           <span>NeedDo 收件箱</span>
-          {loading ? <Spinner /> : <span className="tag">{st.inbox} 条待整理</span>}
+          <div className="acts">
+            {loading ? (
+              <Spinner />
+            ) : (
+              <>
+                <span className="tag">{st.inbox} 条待整理</span>
+                {aiPending.length ? <span className="tag">待 AI {aiPending.length}</span> : null}
+                {aiSuggestedCount ? <span className="tag strong">AI 建议 {aiSuggestedCount}</span> : null}
+              </>
+            )}
+          </div>
         </div>
         <div className="needdo-body">
           <textarea
@@ -472,6 +680,13 @@ export default function NeedDoView() {
               e.target.value = '';
             }}
           />
+          {/* AI 队列的出口提示：排了队但没人知道下一步怎么走，队列就等于积压 */}
+          {aiPending.length ? (
+            <div className="needdo-queue muted">
+              有 {aiPending.length} 条排队等 AI 复核 —— 导出简报交给 agent：
+              <Copyable text={briefCmd}>{briefCmd}</Copyable>
+            </div>
+          ) : null}
         </div>
         <CliHints module="needdo" />
       </div>
@@ -543,16 +758,44 @@ export default function NeedDoView() {
                 >
                   全选
                 </button>
+                {st?.trash ? (
+                  <button className="btn small ghost" onClick={openTrash} title="删除的条目在这里，可恢复">
+                    回收站 {st.trash}
+                  </button>
+                ) : null}
               </>
             )}
           </div>
         </div>
 
+        {/* 检索行：一个输入框就是全文入口（标题/摘录/正文/主题/夹链接），
+            匹配处用现成的 <Highlight> 标黄——与检索域同一个「为什么命中」的表达。 */}
+        <div className="needdo-searchrow">
+          <input
+            className="needdo-search"
+            type="search"
+            spellCheck="false"
+            placeholder="搜条目：标题 / 正文 / 主题 / 链接（文档全文用 CLI 的 needdo list --deep）"
+            value={q}
+            onChange={(e) => setQ(e.target.value)}
+          />
+          {needle ? (
+            <>
+              <span className="muted">匹配 {items.length} 条</span>
+              <button className="btn small ghost" onClick={() => setQ('')}>
+                清空
+              </button>
+            </>
+          ) : null}
+        </div>
+
         {!loading && !items.length && (
           <div className="empty">
-            {filter === 'inbox'
-              ? '收件箱是空的 —— 上面丢一句话进来，或拖个文档进来'
-              : '这个视图下没有条目'}
+            {needle
+              ? `没有匹配「${needle}」的条目`
+              : filter === 'inbox'
+                ? '收件箱是空的 —— 上面丢一句话进来，或拖个文档进来'
+                : '这个视图下没有条目'}
           </div>
         )}
 
@@ -575,7 +818,7 @@ export default function NeedDoView() {
                 onChange={(e) => toggleSel(it.id, e.target.checked)}
               />
               <div className="name mono" title={it.title}>
-                [{kindLabel(it)}] {it.title}
+                [{kindLabel(it)}] <Highlight text={it.title} query={needle} />
               </div>
               <div className="acts">
                 {!!(it.links && it.links.length) && <span className="tag">含链接 {it.links.length}</span>}
@@ -600,6 +843,9 @@ export default function NeedDoView() {
                 <button className="btn small ghost" disabled={busy} onClick={() => openDetail(it)}>
                   查看
                 </button>
+                <button className="btn small ghost" disabled={busy} onClick={() => editItem(it)}>
+                  改
+                </button>
                 <button
                   className="btn small ghost"
                   disabled={busy}
@@ -612,10 +858,12 @@ export default function NeedDoView() {
                 </button>
               </div>
               <div className="desc">
-                {body}
+                {typeof body === 'string' ? <Highlight text={body} query={needle} /> : body}
                 <span className="muted">
                   {body ? ' · ' : ''}
                   {fmtTime(it.addedAt)}
+                  {it.editedAt ? ' · 改过' : ''}
+                  {it.topicSource === 'user' ? ' · 主题你定的' : ''}
                 </span>
               </div>
             </div>
