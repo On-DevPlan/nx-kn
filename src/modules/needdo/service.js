@@ -7,6 +7,7 @@
 // 与其他域同一个纪律：所有「放哪」的路径从 core/paths.js 取，所有读写走
 // core/store.js 的事务接口，这里不直接拼路径、不绕过 mutateStore。
 import fsp from 'node:fs/promises';
+import { createHash } from 'node:crypto';
 import { basename, join } from 'node:path';
 import {
   NEEDDO_FILE_EXTS,
@@ -238,11 +239,238 @@ export async function fileData({ id } = {}) {
 
 // ---- 整理与移除 ----
 
+// ---- agent 交接协议（round3）----
+//
+// 三步两个命令：brief（一次拿全的自足 JSON）→ agent 离线加工 → apply（一份计划文件
+// 单次写回）→ review（人/面板接受或拒绝建议）。设计纪律借自三处既有先例：
+//   · crawl 的 `--enhance-level 0-3`：LLM 用量用显式级别表达，0 = 零 LLM、可离线可 CI
+//   · kb 的 `origin`：来源字段三态，人显式定的永不被自动规则覆盖 → topicSource
+//   · round2 的 links[]：原文一字不动，产出**附挂**在条目上 → ai 段只追加、不覆盖
+//
+// 为什么 AI 只能写 `ai.*` 而不能直接改 `topic`：确定性规则「可解释、可回归测试」
+// 是这套收件箱的地基，AI 结果会漂移、要人拍板。两者分列之后，规则表永远可重放，
+// AI 建议则带完整 provenance（谁、哪一级、什么时候、基于哪一版内容）。
+
+// 级别 0-3 的语义（与 crawl 同一把尺子）。0 是默认值，且必须是「什么都不调」。
+const LEVEL_TASK = {
+  0: '纯规则分类（不调用任何 AI）',
+  1: '复核主题：只对明显该改的条目给 topic，拿不准就给 null',
+  2: '复核主题 + 一句话摘要 summary',
+  3: '复核主题 + 一句话摘要 summary + 3-5 个标签 tags',
+};
+
+export function assertLevel(level) {
+  const n = Number(level ?? 0);
+  // 非 0-3 直接报错，**不静默回落**——crawl 那条纪律：级别写错必须当场知道，
+  // 悄悄按 0 跑会让人以为 AI 参与了（或相反），两种误解都比报错贵。
+  if (!Number.isInteger(n) || n < 0 || n > 3) {
+    throw badInput(`enhance-level 只能是 0-3 的整数，收到: ${level}`);
+  }
+  return n;
+}
+
+// 条目内容指纹。给「这份 brief 是在哪一版内容上做的」一个确定性锚点：
+// apply 时重算比对，不一致说明 agent 加工期间条目被人动过（改了、归档了、删了），
+// 该跳过而不是硬写。topic 也进指纹——别人刚接受过另一份建议也算「动过」。
+export function revOf(item) {
+  const h = createHash('sha256');
+  h.update(
+    [item.kind, item.title, item.content, item.file || '', item.ext || '', item.topic || ''].join('\n')
+  );
+  return h.digest('hex').slice(0, 8);
+}
+
+// 文件条目的提取文本全文（brief 要「自足」：agent 不该再回去摸 needdo/ 目录）。
+// 超长截断——一个几 MB 的文档塞进简报只会让 agent 的上下文白烧。
+const BRIEF_TEXT_MAX = 100_000;
+
+async function fullTextOf(item) {
+  if (item.kind !== 'file') return item.content;
+  if (!item.textFile) return null;
+  try {
+    const text = await fsp.readFile(join(needdoDir(), item.textFile), 'utf8');
+    return text.length > BRIEF_TEXT_MAX ? text.slice(0, BRIEF_TEXT_MAX) + '\n（后文截断）' : text;
+  } catch {
+    return null; // 提取文本被手动清走：简报降级为无全文，条目仍在
+  }
+}
+
+function newBatchId(at) {
+  const p2 = (n) => String(n).padStart(2, '0');
+  const stamp =
+    `${at.getFullYear()}${p2(at.getMonth() + 1)}${p2(at.getDate())}` +
+    `-${p2(at.getHours())}${p2(at.getMinutes())}`;
+  return `nb-${stamp}-${Math.random().toString(16).slice(2, 6)}`;
+}
+
+// 导出简报：**一次调用拿全**（一份 brief = 一次 agent 会话），不要逐条拉。
+// 默认只导出「还没被 AI 处理过」的条目；--redo 才把已有建议的也带上（重跑不重复喂）。
+export async function brief({ ids, level = 1, redo } = {}) {
+  const lv = assertLevel(level);
+  if (lv === 0) {
+    throw badInput('brief 的 --enhance-level 至少是 1（0 = 纯规则分类，用 process 就行）');
+  }
+  const store = await loadStore();
+  const wanted = Array.isArray(ids) ? new Set(ids) : ids ? new Set([ids]) : null;
+
+  let picked = itemsOf(store);
+  if (wanted) picked = picked.filter((x) => wanted.has(x.id));
+  else if (!redo) picked = picked.filter((x) => !x.ai || x.ai.status === 'pending');
+  // 先收的先看：简报按入库时间升序，agent 的输出顺序才与人的直觉一致
+  picked = picked.slice().sort((a, b) => String(a.addedAt).localeCompare(String(b.addedAt)));
+
+  const at = new Date();
+  const items = [];
+  for (const it of picked) {
+    items.push({
+      id: it.id,
+      kind: it.kind,
+      title: it.title,
+      excerpt: it.excerpt,
+      links: it.links,
+      addedAt: it.addedAt,
+      status: it.status,
+      ruleTopic: classifyTopic(it), // 规则表的预判——给 agent 一个「要不要修正」的基线
+      rev: revOf(it),
+      text: await fullTextOf(it),
+    });
+  }
+
+  return {
+    batchId: newBatchId(at),
+    level: lv,
+    task: LEVEL_TASK[lv],
+    generatedAt: at.toISOString(),
+    count: items.length,
+    items,
+    howto: [
+      '把这份 JSON 交给 agent（如 Claude Code），按 task 逐条给出建议。',
+      '写好计划文件后：nx-kn needdo apply --plan <计划.json>',
+      '计划形状：{ batchId, agent, level, results: [{ id, rev, topic?, summary?, tags?, confidence? }] }',
+      '想改就改、不想改就给 null/省略——建议会先落成「待复核」，不会直接改主题。',
+    ],
+  };
+}
+
+// 写回计划：只追加 `ai` 段，绝不覆盖 content/title/excerpt/topic/status。
+// 幂等键 (batchId, id, rev)：同一份计划重复 apply = no-op（报 unchanged）。
+export async function apply({ plan, planPath, agent } = {}) {
+  let doc = plan;
+  // CLI 走 --plan <路径>（与 needdo add --file 同一种「从路径读」的通道），
+  // 面板/HTTP 走 body.planData 直接带对象（未声明键原样透传是 api.js 的既有行为）。
+  if (!doc && planPath) {
+    let raw;
+    try {
+      raw = await fsp.readFile(String(planPath), 'utf8');
+    } catch (e) {
+      throw badInput(`计划文件读不出来: ${planPath}（${(e && e.code) || e}）`);
+    }
+    try {
+      doc = JSON.parse(raw);
+    } catch (e) {
+      throw badInput(`计划文件不是合法 JSON: ${planPath}（${e.message}）`);
+    }
+  }
+  if (!doc || typeof doc !== 'object') {
+    throw badInput('缺少计划 —— CLI 用 --plan <计划.json>，面板走 body.planData');
+  }
+  const results = Array.isArray(doc.results) ? doc.results : null;
+  if (!results || !results.length) throw badInput('计划里没有 results 数组（或它是空的）');
+  const lv = assertLevel(doc.level ?? 1);
+  const agentName = agent || (doc.agent ? String(doc.agent) : null);
+  const batchId = doc.batchId ? String(doc.batchId) : null;
+  const at = new Date().toISOString();
+
+  const out = { applied: 0, unchanged: 0, stale: 0, missing: 0, staleIds: [], missingIds: [], batchId };
+  await mutateStore((store) => {
+    const byId = new Map(itemsOf(store).map((x) => [x.id, x]));
+    for (const r of results) {
+      const item = byId.get(String(r.id));
+      if (!item) {
+        out.missing++;
+        out.missingIds.push(String(r.id));
+        continue;
+      }
+      const cur = revOf(item);
+      if (r.rev && String(r.rev) !== cur) {
+        // 内容变过：简报已过期。跳过不报错——对齐 archive 的 missing 口径，
+        // 部分失效不算失败，但数字要说话（人会知道有几条得重跑）。
+        out.stale++;
+        out.staleIds.push(item.id);
+        continue;
+      }
+      if (batchId && item.ai && item.ai.batchId === batchId && item.ai.status === 'suggested') {
+        out.unchanged++; // 同一份计划重放
+        continue;
+      }
+      item.ai = {
+        status: 'suggested',
+        level: lv,
+        agent: agentName,
+        at,
+        rev: cur,
+        batchId,
+        topic: r.topic == null ? null : String(r.topic),
+        summary: r.summary == null ? '' : String(r.summary),
+        tags: Array.isArray(r.tags) ? r.tags.map(String) : [],
+        confidence: r.confidence == null ? null : Number(r.confidence),
+      };
+      out.applied++;
+    }
+    if (!out.applied && !out.unchanged && (out.stale || out.missing)) {
+      // 一条都没落上：把原因说清（全 stale / 全 missing 各有各的处置）
+      throw badInput(
+        `计划里没有可写入的结果（过期 ${out.stale} 条 / 不存在 ${out.missing} 条）——重跑 ${'nx-kn needdo brief'} 拿最新一版`
+      );
+    }
+  });
+  return out;
+}
+
+// 复核：接受（写 topic 并记 topicSource='ai'）或拒绝（只清状态）。
+// 只是标记「这条建议被人看过并拍板了」，不归档——归档仍归 process。
+export async function review({ id, ids, reject } = {}) {
+  const wanted = Array.isArray(ids) ? ids : ids ? [ids] : id ? [id] : [];
+  if (!wanted.length) throw badInput('缺少条目 id（单个 id 或 ids 数组）');
+  return mutateStore((store) => {
+    const byId = new Map(itemsOf(store).map((x) => [x.id, x]));
+    const res = { accepted: 0, rejected: 0, noSuggestion: [], missing: [] };
+    for (const wid of wanted.map(String)) {
+      const item = byId.get(wid);
+      if (!item) {
+        res.missing.push(wid);
+        continue;
+      }
+      if (!item.ai || item.ai.status !== 'suggested') {
+        res.noSuggestion.push(wid);
+        continue;
+      }
+      if (reject) {
+        item.ai.status = 'rejected';
+        res.rejected++;
+      } else {
+        item.ai.status = 'accepted';
+        if (item.ai.topic) {
+          item.topic = item.ai.topic;
+          item.topicSource = 'ai'; // 来源留痕：这条主题是 AI 建议被人接受的，不是规则定的
+        }
+        res.accepted++;
+      }
+    }
+    if (!res.accepted && !res.rejected) {
+      throw notFound(`没有待复核的 AI 建议: ${[...res.noSuggestion, ...res.missing].join(', ')}`);
+    }
+    return res;
+  });
+}
+
 // 整理收件箱：给未归档条目定主题、写整理报告、归档（inbox → done）。
 // --ids 选择子集（面板多选与 CLI 的 `--ids a,b` 同源）；不给 = 全部 inbox 条目。
-// --agent 是预留的 AI 接入点：v1 只做确定性分类，agent 名先记录在案——
-// 接入后这里换成「先跑规则、再交给 agent 复核」的两段式，输出结构不变。
-export async function process({ agent, ids } = {}) {
+// --enhance-level ≥1 时，同时把条目标成「待 AI 复核」（ai.status='pending'）——
+// 规则照跑、照归档，AI 只是在这之后补一层建议（brief → apply → review）。
+// 级别只影响「要不要挂上 AI 队列」，绝不影响规则分类的结果（那必须是可复现的）。
+export async function process({ agent, ids, level = 0 } = {}) {
+  const lv = assertLevel(level);
   const dir = join(needdoDir(), 'processed');
   await fsp.mkdir(dir, { recursive: true });
   const wanted = Array.isArray(ids) ? new Set(ids) : ids ? new Set([ids]) : null;
@@ -252,9 +480,24 @@ export async function process({ agent, ids } = {}) {
     const pending = itemsOf(store).filter((x) => x.status === 'inbox' && (!wanted || wanted.has(x.id)));
     for (const it of pending) {
       it.topic = classifyTopic(it);
+      it.topicSource = 'rule';
       it.status = 'done';
       it.processedAt = at.toISOString();
       if (agent) it.agent = String(agent);
+      if (lv >= 1) {
+        it.ai = {
+          status: 'pending',
+          level: lv,
+          agent: agent ? String(agent) : null,
+          at: at.toISOString(),
+          rev: revOf(it),
+          batchId: null,
+          topic: null,
+          summary: '',
+          tags: [],
+          confidence: null,
+        };
+      }
     }
     return pending;
   });
@@ -274,9 +517,10 @@ export async function process({ agent, ids } = {}) {
   const lines = [
     `# NeedDo 整理报告 · ${new Date().toLocaleString()}`,
     '',
-    `共整理 ${result.length} 条收件箱条目` +
-      (agent ? `（--agent ${agent}；AI 深度整理待接入，本次为确定性主题分类）` : '（确定性主题分类）') +
-      '',
+    `共整理 ${result.length} 条收件箱条目（确定性主题分类；级别 ${lv}）` +
+      (agent ? `· agent ${agent}` : '') +
+      (lv >= 1 ? ` · 已排队等 AI 复核：${`needdo brief --level ${lv}`}` : ''),
+    '',
   ];
   for (const [topic, list] of byTopic) {
     lines.push(`## ${topic}（${list.length} 条）`, '');
@@ -286,6 +530,11 @@ export async function process({ agent, ids } = {}) {
       if (it.kind === 'link') lines.push(`  ${it.content}`);
       if (it.links && it.links.length) lines.push(`  内含链接: ${it.links.join('  ')}`);
       if (it.file) lines.push(`  原件: ${filePathOf(it)}`);
+      // AI 建议只作附注行；accepted 之后才并进正题（人拍板过的才算结论）
+      if (it.ai && it.ai.status === 'accepted' && it.ai.summary) lines.push(`  摘要(AI): ${it.ai.summary}`);
+      if (it.ai && it.ai.status === 'suggested') {
+        lines.push(`  AI 建议(${it.ai.agent || 'agent'}${it.ai.confidence != null ? ` ${it.ai.confidence}` : ''}): 主题 → ${it.ai.topic || '(不改)'}（待复核）`);
+      }
       lines.push(`  收于 ${String(it.addedAt).replace('T', ' ').slice(0, 16)}`);
     }
     lines.push('');
@@ -297,6 +546,8 @@ export async function process({ agent, ids } = {}) {
     byTopic: [...byTopic.entries()].map(([topic, list]) => ({ topic, count: list.length })),
     report: result.length ? file : null,
     agent: agent || null,
+    level: lv,
+    pendingAi: lv >= 1 ? result.length : 0,
   };
 }
 

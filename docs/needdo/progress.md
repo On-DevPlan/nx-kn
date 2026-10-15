@@ -88,3 +88,54 @@
 - 面板自刷新：参考 kb 的 kb-changed 事件，整理/归档后广播 needdo-changed（或本视图内已 refresh，主要用于跨视图/跨进程）
 - 浏览器走查第二轮：文件条目（真实 PDF/DOCX 上传 → 提取 → 详情 → 下载原件）全链路 + 拖放交互
 - 「全选」与 shift 连选
+
+## Round 3 · 2026-10-15
+
+### 本轮完成
+
+**调研**（docs/needdo/research-round3.md）：AI 怎么接进收件箱——三问三答，结论全部有仓内先例支撑：
+AI 只在整理期出现且只产出「建议」（Notion Autofill 非实时、Readwise 只自动摘要手动保存的、
+Linear triage 的 goalie 拍板）；AI 结果只能是**附注**（git notes / Notion AI 独立属性 / 本仓 links[] 同形）；
+交接用「一次拿全的简报 + 一份计划文件写回」（nx-kv 收单 SOP 已明令禁止逐条拉）。
+
+**实现（agent 交接协议，5 条建议全部落地）**：
+- `process --enhance-level 0-3`：形状/校验/归一化逐字对齐 crawl 的 `--enhance-level`（非 0-3 直接报错不回落）；0 = 纯规则（离线、CI、可复现），≥1 = 同时把条目排进 AI 队列（`ai.status='pending'`）
+- `needdo brief [--ids] [--level] [--redo]`：一次拿全的自足 JSON（全文含文件提取文本、夹链接、**规则预判主题**、8 位内容指纹 `rev`、该级别要做的 task）；默认只导出未处理过的，`--redo` 才重跑
+- `needdo apply --plan <计划.json>`：只追加 `ai` 段，绝不覆盖 content/title/topic/status；幂等键 `(batchId,id,rev)`，重放 = no-op；内容变过的归 `stale` 跳过并回报（对齐 archive 的 missing 口径）
+- `needdo review --ids a,b [--reject]`：接受才写 `topic` 并记 `topicSource:'ai'`（kb 的 origin 直系同类：人显式定的永不被 AI 覆盖）；拒绝只清状态
+- store：条目新增 `topicSource`（rule/ai/user）与 `ai` 附注（level/agent/at/rev/batchId/topic/summary/tags/confidence/status 四态机）
+- 面板：行内「AI 建议 · X」/「待 AI」徽标、详情里的 AI 附注块（含摘要/标签/置信）、接受/拒绝按钮、多选批量「接受建议/拒绝建议」
+- SKILL.md：新增「NeedDo 收件箱」一节（三步命令 + 计划文件形状 + 5 条铁律）+ 命令速查 8 行 + 数据存储说明——外部 agent 的接入点
+
+**顺带完成（第 2 轮遗留）**：
+- 面板自刷新：`visibilitychange` / `window focus` 时重取列表（CLI 外部写入后切回窗口即见，零常驻开销）
+- 全选（只选当前视野里的条目，不把已归档的悄悄选上）
+- 修复 `looksLikeLink` 真 bug：原先先删空白再判，`https://a.com 看一下` 会被整条误存成链接；抽成纯函数 + 单测钉住
+- 修复 `confidence` 的 `Number(null)=0` 陷阱（面板把「没给置信度」显示成「置信 0」）
+
+**验证**：
+- `pnpm test` **165/165 全绿**（新增 7 条：协议三步闭环、幂等、stale/missing、--redo 语义、拒绝路径、plan 文件通道、looksLikeLink）
+- smoke **18/18**（新增 CLI 侧协议全链路）
+- 真实浏览器走查（Playwright）：真实 DOCX/PDF 上传 → 提取文本显示 → 详情 → **原件下载**（字节校验）；面板自刷新；AI 建议徽标 → 详情 AI 块 → 点「接受建议」→ 状态转「已采纳」、按钮消失
+- CLI 端到端：模拟外部 agent 走 `process --enhance-level 2` → `brief` → 写计划 → `apply` → 幂等重放报 unchanged → `review` → 主题生效且 `topicSource=ai`
+
+### 决策记录
+
+- **AI 不许直接写 topic**：确定性规则「可解释、可回归测试」是地基，AI 会漂移——两者分列，建议先落 `suggested`，人/面板接受后才生效。这是调研里最硬的一条产品证据（Notion/Readwise/Linear 都从「捕获时静默标注」退到「整理时显式触发 + 人复核」）。
+- **HTTP 侧计划走 `body.planData`**：CLI 的 `--plan <路径>` 是 string flag；若 HTTP body 也复用 `plan` 键，applySpec 会把对象强转成 `'[object Object]'`。用未声明键透传（api.js 既有行为）绕开强转，代价是键名不对称——已在 action summary 里写明。
+- **restart 才生效**：服务端命令表在进程启动时构建，改完 action 要重启 `serve`（走查时踩到：面板 CliHints 还是旧的命令列表）。
+
+### 遗留问题
+
+1. `brief` 的选区间距：`--redo` 目前是全量重导，没有「只重导被拒绝过的」这一档（rejected 的条目现在会走默认分支被重复导出）
+2. 条目编辑能力仍然缺失（收了错字只能删了重收）
+3. PDF 提取对 CID 字体/扫描件无能为力（原件在，只是无文本）
+4. 走查中观察到一次瞬时 `#/home` 跳转（第 2 轮记录），仍未复现
+5. `process --enhance-level ≥1` 目前只把条目挂进队列，没有提醒「队列里积压了多少」（面板无入口）
+
+### 下轮建议
+
+- 「AI 队列」在面板上的可见性：收件箱卡头显示「N 条待 AI 复核」，点开看到队列（现在只有条目上的「待 AI」徽标）
+- 条目编辑（改文字/改标题/换主题，同时把 `topicSource` 记 `user`）
+- 拖放交互的走查补完（拖入激活态、多文件、取消）
+- 端到端二次走查：把 `--enhance-level` 的完整链路从面板侧暴露（现在面板的「按主题整理」固定级别 0）

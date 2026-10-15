@@ -58,6 +58,18 @@
 .needdo-detail-acts { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .needdo-detail-acts .needdo-tip { margin-left: 0; }
 
+/* AI 附注块（详情里）：柔底 + 发丝框，与正文块同调——它是「意见」不是「正文」。 */
+.needdo-ai {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 12px;
+  background: var(--soft);
+  border: 1px dashed var(--soft-2);
+}
+.needdo-ai-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.needdo-ai-line { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+
 /* 多选：勾选框墨色 accent，与纸面同调；行内不参与 .name 的省略号布局。 */
 .needdo-check {
   accent-color: var(--ink);

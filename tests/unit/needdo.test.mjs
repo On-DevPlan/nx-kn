@@ -3,10 +3,11 @@
 // 防写脏真实数据——与 smoke.mjs 的 isolatedEnv 同一思路。
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, existsSync, readFileSync } from 'node:fs';
+import { mkdtempSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { clearCache, loadStore, normalizeNeeddo } from '../../src/core/store.js';
+import { looksLikeLink } from '../../src/modules/needdo/classify.js';
 import * as needdo from '../../src/modules/needdo/service.js';
 
 // 进程级缓存（core/store.js 的 cache + mtime）会跨用例串数据，每个用例换 store 前先清。
@@ -33,6 +34,17 @@ test('add：文字 / 链接 / 非法输入', async () => {
   await assert.rejects(needdo.addText('   '), /不能为空/);
   await assert.rejects(needdo.addLink('ftp://x'), /http/);
   await assert.rejects(needdo.add({}), /没有可入库的内容/);
+});
+
+test('looksLikeLink：整行才是链接，混排文字走文字路径', () => {
+  assert.equal(looksLikeLink('https://a.com/x'), true);
+  assert.equal(looksLikeLink('  https://a.com/x  '), true, '两侧空白 trim 后判');
+  // 下面两条曾是真实 bug：旧实现先删掉空白再判，混排会被整条存成链接
+  assert.equal(looksLikeLink('https://a.com/x 看一下'), false);
+  assert.equal(looksLikeLink('https://a.com/x\n下一行'), false);
+  assert.equal(looksLikeLink('看看这个 https://a.com'), false);
+  assert.equal(looksLikeLink('ftp://a.com'), false);
+  assert.equal(looksLikeLink(''), false);
 });
 
 test('混排文字：原文不动，夹着的 URL 抽进 links（去重）', async () => {
@@ -202,8 +214,7 @@ test('fileData：原件以 base64 过境，路径与尺寸一并返回', async (
   await assert.rejects(needdo.fileData({ id: t.id }), /没有原件/);
 });
 
-test('normalizeNeeddo：坏条目丢弃、合法条目补默认值（老 store 缺 needdo 键 → items: []）', async () => {
-  freshEnv();
+test('normalizeNeeddo：坏条目丢弃、合法条目补默认值（老 store 缺 needdo 键 → items: []）', async () => {  freshEnv();
   const out = normalizeNeeddo({
     items: [
       { id: 'nd_ok', kind: 'text', content: 'x' },
@@ -221,6 +232,178 @@ test('normalizeNeeddo：坏条目丢弃、合法条目补默认值（老 store �
 
   const st = await loadStore(); // 全新 store：needdo 键自动补齐
   assert.deepEqual(st.needdo, { items: [] });
+});
+
+// ---- agent 交接协议：brief → apply → review ----
+
+test('process --enhance-level：0 是纯规则（不挂 ai），≥1 把条目排进 AI 队列', async () => {
+  freshEnv();
+  await needdo.addText('普通一条');
+  const r0 = await needdo.process({ level: 0 });
+  assert.equal(r0.level, 0);
+  assert.equal(r0.pendingAi, 0);
+  assert.equal((await needdo.list({})).items[0].ai, null, '级别 0 不许挂 ai 段');
+
+  await needdo.addText('记得提交周报');
+  const r2 = await needdo.process({ level: 2, agent: 'claude' });
+  assert.equal(r2.pendingAi, 1);
+  const item = (await needdo.list({})).items.find((x) => x.title === '记得提交周报');
+  assert.equal(item.ai.status, 'pending');
+  assert.equal(item.ai.level, 2);
+  assert.equal(item.ai.agent, 'claude');
+  assert.equal(item.topicSource, 'rule');
+
+  // 级别非 0-3 直接报错，不静默回落
+  await assert.rejects(needdo.process({ level: 5 }), /0-3/);
+  await assert.rejects(needdo.process({ level: 1.5 }), /0-3/);
+});
+
+test('brief → apply → review：AI 建议三步闭环，建议绝不覆盖确定性字段', async () => {
+  freshEnv();
+  const a = await needdo.addText('记得周三前提交报销单');
+  const b = await needdo.addText('随便记的一条想法');
+  await needdo.process({ level: 2, agent: 'claude' });
+
+  const br = await needdo.brief({ level: 2 });
+  assert.equal(br.count, 2, 'process 排队的条目要全部导出');
+  assert.ok(br.batchId.startsWith('nb-'));
+  assert.match(br.task, /摘要/);
+  const bA = br.items.find((x) => x.id === a.id);
+  assert.equal(bA.ruleTopic, '待办事项', '简报要带规则预判作基线');
+  assert.match(bA.rev, /^[0-9a-f]{8}$/, 'rev 是 8 位内容指纹');
+  assert.equal(bA.text, '记得周三前提交报销单', '文字条目的全文要进简报（自足）');
+
+  const plan = {
+    batchId: br.batchId,
+    agent: 'claude',
+    level: 2,
+    results: [
+      { id: a.id, rev: bA.rev, topic: '公告通知', summary: '一条报销提醒', tags: ['报销'], confidence: 0.8 },
+      { id: b.id, rev: br.items.find((x) => x.id === b.id).rev, topic: null, summary: '随手记' },
+    ],
+  };
+  const ap = await needdo.apply({ plan });
+  assert.equal(ap.applied, 2);
+
+  // 幂等：同一份计划重放 = no-op
+  const ap2 = await needdo.apply({ plan });
+  assert.equal(ap2.applied, 0);
+  assert.equal(ap2.unchanged, 2);
+
+  // 建议落地成 ai 段，确定性字段纹丝不动
+  const afterA = (await needdo.show({ id: a.id })).item;
+  assert.equal(afterA.topic, '待办事项', 'apply 不许动规则定的 topic');
+  assert.equal(afterA.status, 'done', 'apply 不许动归档状态');
+  assert.equal(afterA.ai.status, 'suggested');
+  assert.equal(afterA.ai.topic, '公告通知');
+  assert.equal(afterA.ai.summary, '一条报销提醒');
+  assert.deepEqual(afterA.ai.tags, ['报销']);
+  assert.equal(afterA.ai.confidence, 0.8);
+  // 计划里没给 confidence 的条目不该变成「置信 0」（Number(null) 陷阱）
+  const afterB0 = (await needdo.show({ id: b.id })).item;
+  assert.equal(afterB0.ai.confidence, null);
+  assert.equal(afterB0.ai.tags.length, 0);
+
+  // 接受：写 topic 并记 topicSource='ai'；topic 为 null 的「我不改」保持规则结果
+  const rv = await needdo.review({ ids: [a.id, b.id] });
+  assert.equal(rv.accepted, 2);
+  const acceptedA = (await needdo.show({ id: a.id })).item;
+  assert.equal(acceptedA.topic, '公告通知');
+  assert.equal(acceptedA.topicSource, 'ai');
+  const acceptedB = (await needdo.show({ id: b.id })).item;
+  assert.equal(acceptedB.topic, '杂项收集');
+  assert.equal(acceptedB.topicSource, 'rule');
+
+  // 复核过的不能再复核（已经不是 suggested 了）
+  await assert.rejects(needdo.review({ ids: [a.id] }), /没有待复核/);
+});
+
+test('apply：过期（rev 不符）跳过、不存在回报、全无有效结果时报错', async () => {
+  freshEnv();
+  const a = await needdo.addText('记得交周报');
+  await needdo.process({ level: 1 });
+  const br = await needdo.brief({ level: 1 });
+
+  const plan = {
+    batchId: br.batchId,
+    results: [
+      { id: a.id, rev: 'deadbeef', topic: '待办事项' }, // 指纹对不上 → 过期
+      { id: 'nd_ghost', rev: 'x', topic: '待办事项' }, // 不存在
+    ],
+  };
+  await assert.rejects(needdo.apply({ plan }), /没有可写入的结果/, '全过期/全不存在时要报错，不做静默空操作');
+
+  // 混合：一条有效 + 一条过期 → 报数字，不报错
+  const b = await needdo.addText('再看一眼这个 https://a.com/x');
+  await needdo.process({ level: 1 });
+  const br2 = await needdo.brief({ level: 1 });
+  // a 上一轮排的队还挂着 pending（那轮的 apply 全过期没落上），所以两条都在简报里
+  assert.equal(br2.count, 2, 'pending 队列里的条目都该导出');
+  const bItem = br2.items.find((x) => x.id === b.id);
+  const mixed = {
+    batchId: br2.batchId,
+    results: [
+      { id: bItem.id, rev: bItem.rev, topic: '待办事项', summary: '看一眼链接' },
+      { id: a.id, rev: 'deadbeef', topic: '待办事项' },
+    ],
+  };
+  const r = await needdo.apply({ plan: mixed });
+  assert.equal(r.applied, 1);
+  assert.equal(r.stale, 1);
+  assert.deepEqual(r.staleIds, [a.id]);
+});
+
+test('brief：默认跳过已有建议的，--redo 才带上（重跑不重复喂）', async () => {
+  freshEnv();
+  const a = await needdo.addText('记得交周报');
+  await needdo.process({ level: 1 });
+  const br = await needdo.brief({ level: 1 });
+  await needdo.apply({
+    plan: { batchId: br.batchId, results: [{ id: a.id, rev: br.items[0].rev, topic: '公告通知' }] },
+  });
+
+  assert.equal((await needdo.brief({ level: 1 })).count, 0, '已有建议（suggested）的不再默认导出');
+  assert.equal((await needdo.brief({ level: 1, redo: true })).count, 1, '--redo 才重跑');
+  assert.equal((await needdo.brief({ ids: [a.id] })).count, 1, '--ids 直接点名不受默认过滤影响');
+  await assert.rejects(needdo.brief({ level: 0 }), /至少是 1/);
+});
+
+test('review --reject：只清状态，不碰主题', async () => {
+  freshEnv();
+  const a = await needdo.addText('记得交周报');
+  await needdo.process({ level: 1 });
+  const br = await needdo.brief({ level: 1 });
+  await needdo.apply({
+    plan: { batchId: br.batchId, results: [{ id: a.id, rev: br.items[0].rev, topic: '公告通知' }] },
+  });
+
+  const rv = await needdo.review({ id: a.id, reject: true });
+  assert.equal(rv.rejected, 1);
+  const after = (await needdo.show({ id: a.id })).item;
+  assert.equal(after.ai.status, 'rejected');
+  assert.equal(after.topic, '待办事项', '拒绝的建议不许影响规则主题');
+  assert.equal(after.topicSource, 'rule');
+});
+
+test('apply --plan <路径>：CLI 通道从文件读计划', async () => {
+  freshEnv();
+  const a = await needdo.addText('记得交周报');
+  await needdo.process({ level: 1 });
+  const br = await needdo.brief({ level: 1 });
+  const planPath = join(envDir, 'plan.json');
+  writeFileSync(
+    planPath,
+    JSON.stringify({ batchId: br.batchId, agent: 'cli-agent', level: 1, results: [{ id: a.id, rev: br.items[0].rev, topic: '公告通知' }] })
+  );
+  const r = await needdo.apply({ planPath });
+  assert.equal(r.applied, 1);
+  const after = (await needdo.show({ id: a.id })).item;
+  assert.equal(after.ai.agent, 'cli-agent');
+
+  await assert.rejects(needdo.apply({ planPath: join(envDir, 'nope.json') }), /读不出来/);
+  const badPath = join(envDir, 'bad.json');
+  writeFileSync(badPath, '{oops');
+  await assert.rejects(needdo.apply({ planPath: badPath }), /不是合法 JSON/);
 });
 
 // ---- 测试用的最小 zip 构造（store 方法，不压缩；CRC 置 0——本仓读取器不校验 CRC） ----

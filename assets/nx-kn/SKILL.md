@@ -57,6 +57,15 @@ CLI 与 Web 面板共享同一份 action 声明。需要时还能把**文档站�
 | `nx-kn crawl list` | 采集源列表 + 上次抓取时间 / 页数 / 失败数 |
 | `nx-kn crawl remove <name> [--purge]` | 解登记（默认保留抓下来的文件与知识库登记；`--purge` 连目录一起删） |
 | `nx-kn pipeline [目录\|URL\|源名] [--rebuild]` | **一键流水线**：抓取 → 更新索引两步串联（前后关系不是选择关系）。**给目录就直接抓取该目录**——未登记自动登记，已登记复用现源（重复提供同目录 = 增量重跑）。抓取失败不阻断索引；跑完即可 `query` |
+| `nx-kn needdo add <文字> [--link URL] [--file 路径] [--title 标题]` | 把混乱输入收进**收件箱**：一段文字 / 一个网址 / 一个本地文档（pdf/docx/txt/md，落盘到数据目录 `needdo/` 并尽力提取文本） |
+| `nx-kn needdo list [--status inbox\|done] [--topic T]` | 列收件箱条目（默认全部；条目 = 文字/链接/文档三类） |
+| `nx-kn needdo show <id>` | 一条的完整内容（文字给全文；文档给提取文本；链接给网址） |
+| `nx-kn needdo process [--ids a,b] [--enhance-level 0-3] [--agent A]` | **按主题整理归档**（规则表：待办/公告/文档/链接/杂项）+ 写 markdown 报告；`--enhance-level ≥1` 同时把条目排进 AI 复核队列 |
+| `nx-kn needdo brief [--ids a,b] [--level 1-3] [--redo]` | 导出 **agent 简报**（自足 JSON：全文 + 夹链接 + 规则预判主题 + 内容指纹）。配合 `--json` |
+| `nx-kn needdo apply --plan <计划.json>` | 写回 agent 的**计划文件**（只追加 `ai` 附注，绝不覆盖原文/主题/状态） |
+| `nx-kn needdo review --ids a,b [--reject]` | 复核 AI 建议：默认接受（主题按建议更新），`--reject` 拒绝 |
+| `nx-kn needdo archive <id> [--undo] [--ids a,b]` | 归档（移出收件箱视野，数据保留）；`--undo` 还原 |
+| `nx-kn needdo remove [id] [--ids a,b] [--all]` | 删条目（连同原件与提取文本；整理报告不受影响） |
 | `nx-kn watch [--debounce ms]` | **守护**：常驻监听各库，笔记一变就自动增量索引（Ctrl+C 停）。改完笔记要立刻搜到就用它 |
 | `nx-kn watch status` | 守护状态：是否在跑、监听哪些库、最近刷新记录 |
 | `nx-kn serve [--port N] [--no-open] [--no-watch]` | 启动 Web 面板（**默认带守护**；`--no-watch` 关掉，面板上也有开关） |
@@ -148,6 +157,51 @@ CLI 与 Web 面板共享同一份 action 声明。需要时还能把**文档站�
 - 抓取范围（`--match` / `--max`）在 `crawl add` 时定；要改就 `crawl remove` 后重新 `crawl add`
 - 删数据用 `nx-kn crawl remove <名> --purge`（不带 `--purge` 只解登记，文件留着）
 
+## NeedDo 收件箱（混乱输入 → 主题整理）
+
+用户随手丢进来的东西（一段杂乱文字、公告、网址、PDF/DOCX）都落在**收件箱**里，
+条目分三类：`text` / `link` / `file`（文档原件与提取文本落在数据目录的 `needdo/` 下）。
+「先收进来，再整理」——捕获期零 LLM、零分类负担。
+
+**整理是确定性的**（可解释、可回归）：
+
+```bash
+nx-kn needdo process --json          # 规则表分类：待办/公告/文档/链接/杂项 → 归档 + 写报告
+```
+
+**AI 是可选的一层建议，三步两个命令**（`--enhance-level ≥1` 才排队，默认 0 = 不调 AI）：
+
+```bash
+# ① 整理时排队（级别 1 = 主题修正 / 2 = +一句话摘要 / 3 = +标签）
+nx-kn needdo process --enhance-level 2 --agent claude --json
+
+# ② 取简报：一次拿全（全文、夹链接、规则预判主题、内容指纹 rev）
+nx-kn needdo brief --level 2 --json > brief.json
+#    → 按 JSON 里的 task 逐条给建议，写一份计划文件
+
+# ③ 写回计划 + 等复核
+nx-kn needdo apply --plan plan.json --json
+nx-kn needdo review --ids <id1>,<id2> --json     # 接受（--reject 拒绝）
+```
+
+计划文件的形状（**只写你确定要改的字段**，`null` / 省略 = 我不改）：
+
+```json
+{ "batchId": "<brief 里的 batchId>", "agent": "claude", "level": 2,
+  "results": [{ "id": "nd_xxx", "rev": "<brief 里该条的 rev>",
+                "topic": "待办事项", "summary": "一句话", "tags": ["…"], "confidence": 0.8 }] }
+```
+
+铁律（决定了你可以放心用）：
+
+- **AI 只写 `ai` 附注，不覆盖任何确定性字段**（`content/title/topic/status` 一个都不动）；
+  建议先落成 `suggested`，**人接受后**才写进 `topic`（并记 `topicSource: 'ai'`）
+- `rev` 是**内容指纹**：`apply` 时重算比对，条目在你加工期间被改过 / 删过就归入 `stale`
+  跳过并回报（不是报错）——拿不准就重新 `brief` 一版
+- **幂等**：同一份计划重复 `apply` = no-op（回报 `unchanged`）；`(batchId, id, rev)` 是幂等键
+- `brief` 默认只导出**还没被 AI 处理过**的条目（不重复喂、不重复花钱）；`--redo` 才含已有的
+- 重跑从不重复归档：`process` 只动 `inbox` 状态的条目
+
 ## 守护（让索引随笔记自动更新）
 
 不想每次改完笔记都记得手动跑一次 `nx-kn index`：
@@ -197,6 +251,10 @@ CLI 与 Web 面板共享同一份 action 声明。需要时还能把**文档站�
   `<数据目录>/sources/<源名>/**/*.md`，每页一个 `.md`（带 `source` / `title` / `fetchedAt` frontmatter）；
   增量清单是各源目录内的 `.nx-kn-crawl.json`（`url → { file, hash }`）
 - `sources/` 跟着 store 走（同一个数据目录），所以 `NX_KN_STORE` / `--store` 一次搬动全部数据
+- 收件箱条目在 `needdo.items[]`：`{ id, kind, title, content, excerpt, links, file, textFile, topic, topicSource, ai, status, addedAt }`。
+  文档原件与提取文本落 `<数据目录>/needdo/`（`<id>.<ext>` 与 `<id>.txt`），整理报告落
+  `<数据目录>/needdo/processed/*.md`；`topicSource` 记主题来自谁（`rule` / `ai` / `user`），
+  `ai` 是 AI 的**附注**（建议主题/摘要/标签/置信度 + `pending→suggested→accepted|rejected` 状态机）
 - 环境变量 `NX_KN_VAULT` 可临时指定「只看这一个目录」（不落盘、不改列表）
 - 环境变量 `NX_KN_CRAWL_DELAY_MS` 改抓取间隔（默认 300ms）
 - 索引落在各库自己的 `<vault>/.zvec-grep/`（zg 拥有；删掉它 = 那个库回到未索引状态）

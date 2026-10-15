@@ -16,6 +16,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { api } from '../../web/frontend/api/client.js';
 import { CliHints } from '../../web/frontend/components/CliHints.jsx';
 import { Copyable, Modal, Spinner, useDialog, useToast } from '../../web/frontend/components/ui.jsx';
+import { looksLikeLink } from './classify.js';
 
 // 与 core/paths.js 的 NEEDDO_FILE_MAX_BYTES 同口径（HTTP body 4MB 上限的 base64 换算）。
 // 前端先卡一道，错误在拖进去的那一刻就给出，而不是等请求回来。
@@ -26,6 +27,9 @@ const KIND_LABEL = { text: '文字', link: '链接' };
 function kindLabel(it) {
   return it.kind === 'file' ? (it.ext || '文件').toUpperCase() : KIND_LABEL[it.kind] || it.kind;
 }
+
+// AI 附注的四态（round3 协议）：pending 是排队等 agent，suggested 才是等**人**拍板。
+const AI_STATUS = { pending: '待 agent 复核', suggested: '待你复核', accepted: '已采纳', rejected: '已拒绝' };
 
 function fmtTime(iso) {
   if (!iso) return '';
@@ -84,6 +88,21 @@ export default function NeedDoView() {
 
   useEffect(() => { refresh(); }, [refresh]);
 
+  // 面板自刷新：收件箱的写入口不止这个面板——CLI / agent 在别的终端往里丢东西是
+  // 常规用法。而本仓不给 kb 那套轮询（起子进程的代价），所以用「回到这个窗口就
+  // 重取一次」的轻办法：可见性变化 + 窗口聚焦各触发一次，没有定时器零常驻开销。
+  useEffect(() => {
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') refresh();
+    };
+    document.addEventListener('visibilitychange', onVisible);
+    window.addEventListener('focus', onVisible);
+    return () => {
+      document.removeEventListener('visibilitychange', onVisible);
+      window.removeEventListener('focus', onVisible);
+    };
+  }, [refresh]);
+
   async function withBusy(fn) {
     if (busyRef.current) return;
     busyRef.current = true;
@@ -121,8 +140,9 @@ export default function NeedDoView() {
   async function submit() {
     const v = text.trim();
     if (!v || busyRef.current) return;
-    // 铁律 1：类型系统识别——不带空白且是合法 http(s) 形态的整行 → 链接，其余 → 文字
-    const isLink = /^https?:\/\/\S+$/i.test(v.replace(/\s+/g, ''));
+    // 铁律 1：类型系统识别——**整行**就是一个 URL 才算链接条目（判据在 classify.js，
+    // 有单测）。混排文字走文字路径：后端把里面的 URL 抽进 links，原文一字不动。
+    const isLink = looksLikeLink(v);
     await withBusy(async () => {
       await api('/api/needdo/add', {
         method: 'POST',
@@ -208,6 +228,11 @@ export default function NeedDoView() {
   // 批量动作共用一个出口：做完清空选择（条目已经不在当前视野里了）。
   const clearSel = () => setSel(new Set());
 
+  // 全选：只选**当前视野里**的条目（过滤后的），不是全库——「全选」在收件箱过滤下
+  // 就该是「全选待整理的」，把已归档的也悄悄选上会让人在批量删除时踩雷。
+  const visibleIds = () => items.map((x) => x.id);
+  const selectAll = () => setSel(new Set(visibleIds()));
+
   async function batchArchive() {
     await withBusy(async () => {
       await api('/api/needdo/archive', { method: 'POST', body: { ids: [...sel], undo: filter === 'done' } });
@@ -222,6 +247,20 @@ export default function NeedDoView() {
       toast(r.processed ? `已整理 ${r.processed} 条：${r.byTopic.map((x) => `${x.topic} ${x.count}`).join(' / ')}` : '选中条目里没有待整理的');
       clearSel();
       await refresh();
+    });
+  }
+
+  // 批量复核 AI 建议：选中里的 suggested 条目一次性接受/拒绝（其余的会被服务端跳过）
+  async function batchReview(reject) {
+    await withBusy(async () => {
+      try {
+        const r = await api('/api/needdo/review', { method: 'POST', body: { ids: [...sel], reject } });
+        toast(reject ? `已拒绝 ${r.rejected} 条 AI 建议` : `已接受 ${r.accepted} 条 AI 建议`);
+        clearSel();
+        await refresh();
+      } catch (e) {
+        toast(String(e.message || e));
+      }
     });
   }
 
@@ -261,6 +300,24 @@ export default function NeedDoView() {
     }
   }
 
+  // 复核 AI 建议：接受 = 主题按建议更新并记来源；拒绝 = 只清状态。
+  // 建议永远是「建议」——不静默应用（改了主视图结构的事必须有人拍板）。
+  async function reviewItem(it, reject) {
+    await withBusy(async () => {
+      try {
+        await api('/api/needdo/review', { method: 'POST', body: { id: it.id, reject } });
+        toast(reject ? '已拒绝这条 AI 建议' : '已接受这条 AI 建议');
+        await refresh();
+        // 详情开着的话同步刷新，否则关掉弹层回列表看新状态
+        if (detail && detail.item.id === it.id) {
+          setDetail(await api('/api/needdo/show?id=' + encodeURIComponent(it.id)));
+        }
+      } catch (e) {
+        toast(String(e.message || e));
+      }
+    });
+  }
+
   // 拖入计数而非布尔开关：拖经子元素会连发 dragleave，深度计数才能稳住激活态。
   const onDragEnter = (e) => {
     if (!Array.from(e.dataTransfer?.types || []).includes('Files')) return;
@@ -281,6 +338,8 @@ export default function NeedDoView() {
   };
 
   const items = st ? st.items.filter((x) => (filter === 'all' ? true : x.status === filter)) : [];
+  const selItems = items.filter((x) => sel.has(x.id));
+  const anySuggestion = selItems.some((x) => x.ai && x.ai.status === 'suggested');
   const loading = st === null;
 
   return (
@@ -298,9 +357,46 @@ export default function NeedDoView() {
             <div className="needdo-detail-meta">
               <span className="tag strong">{kindLabel(detail.item)}</span>
               {detail.item.topic ? <span className="tag strong">{detail.item.topic}</span> : <span className="tag">未整理</span>}
+              {detail.item.topicSource === 'ai' ? <span className="tag">主题来自 AI</span> : null}
               <span className="tag">{detail.item.status === 'done' ? '已归档' : '收件箱'}</span>
               <span className="muted">{fmtTime(detail.item.addedAt)}</span>
             </div>
+            {/* AI 附注：建议永远只在这里展示，接受之后才会写进 topic */}
+            {detail.item.ai ? (
+              <div className="needdo-ai">
+                <div className="needdo-ai-head">
+                  <span className="tag strong">
+                    AI 建议{detail.item.ai.status === 'suggested' ? '（待复核）' : ''}
+                  </span>
+                  <span className="muted">
+                    {detail.item.ai.agent || 'agent'} · 级别 {detail.item.ai.level}
+                    {detail.item.ai.confidence != null ? ` · 置信 ${detail.item.ai.confidence}` : ''}
+                    {` · ${AI_STATUS[detail.item.ai.status] || detail.item.ai.status}`}
+                  </span>
+                </div>
+                {detail.item.ai.topic ? (
+                  <div className="needdo-ai-line">建议主题：<b>{detail.item.ai.topic}</b></div>
+                ) : null}
+                {detail.item.ai.summary ? <div className="needdo-ai-line">{detail.item.ai.summary}</div> : null}
+                {!!(detail.item.ai.tags && detail.item.ai.tags.length) && (
+                  <div className="needdo-ai-line">
+                    {detail.item.ai.tags.map((t) => (
+                      <span className="tag" key={t}>{t}</span>
+                    ))}
+                  </div>
+                )}
+                {detail.item.ai.status === 'suggested' && (
+                  <div className="needdo-detail-acts">
+                    <button className="btn small" disabled={busy} onClick={() => reviewItem(detail.item, false)}>
+                      接受建议
+                    </button>
+                    <button className="btn small ghost" disabled={busy} onClick={() => reviewItem(detail.item, true)}>
+                      拒绝
+                    </button>
+                  </div>
+                )}
+              </div>
+            ) : null}
             {!!(detail.item.links && detail.item.links.length) && (
               <div className="needdo-detail-links">
                 {detail.item.links.map((u) => (
@@ -389,6 +485,13 @@ export default function NeedDoView() {
             {sel.size ? (
               <>
                 <span className="tag strong">已选 {sel.size}</span>
+                <button
+                  className="btn small ghost"
+                  disabled={sel.size >= items.length}
+                  onClick={selectAll}
+                >
+                  全选 {items.length}
+                </button>
                 <button className="btn small ghost" onClick={clearSel}>清除</button>
                 <button className="btn small" disabled={busy} onClick={batchArchive}>
                   {filter === 'done' ? '还原' : '归档'}
@@ -397,6 +500,16 @@ export default function NeedDoView() {
                   <button className="btn small" disabled={busy} onClick={batchProcess}>
                     整理
                   </button>
+                )}
+                {anySuggestion && (
+                  <>
+                    <button className="btn small" disabled={busy} onClick={() => batchReview(false)}>
+                      接受建议
+                    </button>
+                    <button className="btn small ghost" disabled={busy} onClick={() => batchReview(true)}>
+                      拒绝建议
+                    </button>
+                  </>
                 )}
                 <button className="btn small ghost" disabled={busy} onClick={batchDelete}>
                   删除
@@ -421,6 +534,14 @@ export default function NeedDoView() {
                   onClick={() => setFilter('all')}
                 >
                   全部 {st ? st.total : '…'}
+                </button>
+                <button
+                  className="btn small ghost"
+                  disabled={!items.length}
+                  title="选中当前视野里的全部条目"
+                  onClick={selectAll}
+                >
+                  全选
                 </button>
               </>
             )}
@@ -463,6 +584,17 @@ export default function NeedDoView() {
                 ) : (
                   <span className="tag">未整理</span>
                 )}
+                {it.topicSource === 'ai' ? <span className="tag">主题来自 AI</span> : null}
+                {it.ai && it.ai.status === 'suggested' ? (
+                  <span
+                    className="tag strong"
+                    title={`${it.ai.summary || '（无摘要）'}${it.ai.topic ? `\n建议主题 → ${it.ai.topic}` : '\n建议不改主题'}`}
+                  >
+                    AI 建议{it.ai.topic ? ` · ${it.ai.topic}` : ' · 不改主题'}
+                  </span>
+                ) : it.ai && it.ai.status === 'pending' ? (
+                  <span className="tag" title="已排进 AI 复核队列（跑 needdo brief 导出简报）">待 AI</span>
+                ) : null}
                 {it.status === 'done' ? <span className="tag">已归档</span> : null}
                 {it.kind === 'file' && !it.textFile ? <span className="tag">无文本</span> : null}
                 <button className="btn small ghost" disabled={busy} onClick={() => openDetail(it)}>

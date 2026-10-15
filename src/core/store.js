@@ -319,6 +319,13 @@ export function normalizeCrawl(raw) {
 // 一条收件箱条目。kind 三态：text（粘贴的文字）/ link（URL）/ file（上传的原件）。
 // file 条目的 content 只存摘录（提取文本的前几百字），全文在 needdoDir() 下的文件里——
 // store.json 是「条目清单」，不是文档仓库，塞全文会让每次读-改-写都搬运几 MB。
+//
+// topicSource 与 ai 是 round3（agent 交接协议）加的：
+//   topicSource  'rule'（规则表定的）| 'ai'（AI 建议被接受后生效）| 'user' | null
+//                —— kb 的 origin: 'user' | 'crawl' 的直系同类，人显式定的永不被 AI 覆盖
+//   ai           AI 的**附注**（可空）：建议主题/摘要/标签/置信度 + 状态机
+//                pending → suggested → accepted | rejected。
+//                它绝不覆盖确定性字段（content/title/excerpt/topic/status 一个都不动）。
 function normalizeNeeddoItem(it) {
   if (!it || typeof it !== 'object') return null;
   const id = it.id ? String(it.id) : null;
@@ -343,10 +350,40 @@ function normalizeNeeddoItem(it) {
     ext,
     size: Number.isFinite(size) ? size : null,
     topic: typeof it.topic === 'string' && it.topic ? it.topic : null,
+    topicSource: ['rule', 'ai', 'user'].includes(it.topicSource) ? it.topicSource : null,
+    ai: normalizeNeeddoAi(it.ai),
     status: it.status === 'done' ? 'done' : 'inbox',
     agent: it.agent ? String(it.agent) : null,
     addedAt: it.addedAt ? String(it.addedAt) : null,
     processedAt: it.processedAt ? String(it.processedAt) : null,
+  };
+}
+
+// AI 附注（round3）。status 四态：pending（排队待复核）→ suggested（agent 已给建议，
+// 等人/面板接受）→ accepted | rejected。level 照 crawl 的 0-3（0 = 没调 LLM，
+// 也不该有附注——但真出现了就照实留着，归一化的职责是校验不是抹除）。
+function normalizeNeeddoAi(ai) {
+  if (!ai || typeof ai !== 'object') return null;
+  const status = ['pending', 'suggested', 'accepted', 'rejected'].includes(ai.status) ? ai.status : null;
+  if (!status) return null;
+  const level = Number(ai.level);
+  // confidence 与 size 同一个坑：Number(null) === 0 会把「没给置信度」变成「置信 0」，
+  // 而 0 在面板上是个有意义的读数（看起来像 AI 很不确定）。空值显式拦下。
+  const conf =
+    ai.confidence === null || ai.confidence === undefined || ai.confidence === ''
+      ? NaN
+      : Number(ai.confidence);
+  return {
+    status,
+    level: Number.isInteger(level) && level >= 0 && level <= 3 ? level : 0,
+    agent: ai.agent ? String(ai.agent) : null,
+    at: ai.at ? String(ai.at) : null,
+    rev: ai.rev ? String(ai.rev) : null,
+    batchId: ai.batchId ? String(ai.batchId) : null,
+    topic: typeof ai.topic === 'string' && ai.topic ? ai.topic : null,
+    summary: typeof ai.summary === 'string' && ai.summary ? ai.summary : '',
+    tags: Array.isArray(ai.tags) ? ai.tags.filter((x) => typeof x === 'string' && x) : [],
+    confidence: Number.isFinite(conf) ? conf : null,
   };
 }
 
