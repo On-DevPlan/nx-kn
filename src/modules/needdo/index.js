@@ -212,6 +212,49 @@ export default {
       },
     },
     {
+      id: 'needdo.export',
+      cli: [['needdo', 'export']],
+      http: ['POST', '/api/needdo/export'],
+      summary:
+        '沉淀：把条目导出成 markdown 落进 <数据目录>/needdo/export/<主题>/ 并自动登记为知识库（默认跑全部已归档条目，按内容指纹报「新增/更新/未变」；--ids 可指名含收件箱的条目；--redo 强制重写；--to 换目标根则只落盘不登记；--archive 顺手归档）',
+      flags: {
+        ids: { type: 'array', hint: '导出这些条目（逗号分隔，可含收件箱里的）' },
+        topic: { type: 'string', enum: service.TOPICS, hint: '只导出这个主题' },
+        redo: { type: 'boolean', hint: '已沉淀过的也重写一遍（内容以条目为准）' },
+        to: { type: 'string', hint: '目标根目录（给了就不自动登记——那是你的库，用 kb add 管）' },
+        archive: { type: 'boolean', hint: '导出后顺手把条目归档' },
+      },
+      run: (ctx) =>
+        service.exportItems({
+          ids: ctx.ids,
+          topic: ctx.topic,
+          redo: ctx.redo,
+          to: ctx.to,
+          archive: ctx.archive,
+        }),
+      render: (r) => {
+        const written = r.exported + r.updated;
+        const head = written
+          ? `已沉淀 ${written} 条（新增 ${r.exported} / 更新 ${r.updated}）`
+          : r.unchanged
+            ? `没有需要写的（${r.unchanged} 条已是最新）`
+            : '没有可沉淀的条目（默认只导已归档的——先 process，或用 --ids 指名收件箱里的）';
+        const lines = [head];
+        const bits = [];
+        if (r.unchanged) bits.push(`未变 ${r.unchanged}`);
+        if (r.skipped.length) bits.push(`跳过 ${r.skipped.length}`);
+        if (r.missing && r.missing.length) bits.push(`不存在 ${r.missing.length}`);
+        if (bits.length) lines.push(`  ${bits.join(' · ')}`);
+        for (const s of r.skipped.slice(0, 5)) lines.push(`    跳过 ${s.id}：${s.reason}`);
+        if (written) {
+          lines.push(`  目录   ${r.dir}`);
+          lines.push('', r.hint);
+        }
+        lines.push('', `（导出物是产物：人在库里改了它不回流——要改就改条目再 ${hint('needdo export --redo')}）`);
+        return lines.join('\n');
+      },
+    },
+    {
       id: 'needdo.trash',
       cli: [['needdo', 'trash']],
       http: ['POST', '/api/needdo/trash'],

@@ -58,6 +58,16 @@
 .needdo-detail-acts { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .needdo-detail-acts .needdo-tip { margin-left: 0; }
 
+/* 空状态里的引导：按钮 + 一句说明，左对齐排一行。 */
+.needdo-empty-acts {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+  flex-wrap: wrap;
+}
+.needdo-empty-acts .muted { font-size: 11px; }
+
 /* 检索行：一条输入框 + 命中数 + 清空。发丝线起分隔，不抢卡头的层级。 */
 .needdo-searchrow {
   display: flex;

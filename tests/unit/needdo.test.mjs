@@ -615,6 +615,122 @@ test('apply --plan <路径>：CLI 通道从文件读计划', async () => {
   await assert.rejects(needdo.apply({ planPath: badPath }), /不是合法 JSON/);
 });
 
+// ---- 沉淀（round5）：导出成 markdown 目录并登记为知识库 ----
+
+test('export：落成 <主题>/<日期>-<slug>-<id>.md，登记为知识库，幂等可重跑', async () => {
+  freshEnv();
+  const a = await needdo.addText('记得周三前提交报销单');
+  await needdo.addText('下周团建的安排：周五下午出发');
+  await needdo.process({});
+
+  const r = await needdo.exportItems({});
+  assert.equal(r.exported, 2);
+  assert.equal(r.updated, 0);
+  assert.equal(r.unchanged, 0);
+  assert.equal(r.dir, join(envDir, 'needdo', 'export'));
+  assert.equal(r.registered, true, '有内容才登记，登记了要回报');
+
+  // 产物：主题目录 + 日期-slug-id.md，frontmatter 与正文都齐
+  const item = (await needdo.show({ id: a.id })).item;
+  assert.equal(item.topic, '待办事项');
+  assert.ok(item.exportPath.startsWith(join('待办事项', '')), `导出路径应在主题子目录下: ${item.exportPath}`);
+  assert.ok(item.exportPath.endsWith(`-${a.id}.md`), '文件名要带完整条目 id（能从文件 grep 回源条目）');
+  assert.equal(item.exportRev, needdo.revOf(item));
+  assert.ok(item.exportedAt);
+  const md = readFileSync(join(envDir, 'needdo', 'export', item.exportPath), 'utf8');
+  assert.match(md, /^---\n/);
+  assert.match(md, new RegExp(`id: ${a.id}`));
+  assert.match(md, /source: needdo/);
+  assert.match(md, /topic: 待办事项/);
+  assert.match(md, /# 记得周三前提交报销单/);
+  assert.match(md, /正文|记得周三前提交报销单/, '正文要进产物');
+
+  // 登记为知识库（origin=user：这是显式动作，不是 crawl 那种可被 standby 排除的产物）
+  const store = await loadStore();
+  const vault = store.kb.vaults.find((v) => v.name === 'needdo-export');
+  assert.ok(vault, '默认目标根要自动登记为知识库');
+  assert.equal(vault.origin, 'user');
+  assert.equal(vault.path, r.dir);
+
+  // 幂等：再跑一次是「没变」，不重写文件
+  const again = await needdo.exportItems({});
+  assert.equal(again.exported, 0);
+  assert.equal(again.unchanged, 2);
+  assert.equal(readFileSync(join(envDir, 'needdo', 'export', item.exportPath), 'utf8'), md, '未变就不该重写');
+
+  // 内容变了 → --redo 重写，且**路径不变**（不因主题变了搬家）
+  await needdo.edit({ id: a.id, body: '改过的正文：周三前提交', topic: '公告通知' });
+  const redo = await needdo.exportItems({ redo: true });
+  assert.equal(redo.updated, 2, '--redo 连未变的也重写（增量判断让位给显式要求）');
+  const after = (await needdo.show({ id: a.id })).item;
+  assert.equal(after.exportPath, item.exportPath, '改主题也不搬家——移动文件会打断已有链接');
+  assert.match(readFileSync(join(envDir, 'needdo', 'export', after.exportPath), 'utf8'), /改过的正文/);
+});
+
+test('export：默认只跑已归档条目；--ids 可指名收件箱里的；--to 不登记', async () => {
+  freshEnv();
+  const done = await needdo.addText('已归档的一条');
+  const inbox = await needdo.addText('还在收件箱的一条');
+  await needdo.process({ ids: [done.id] });
+
+  const r1 = await needdo.exportItems({});
+  assert.equal(r1.exported, 1, '收件箱里的不默认导出');
+  assert.equal(r1.unchanged, 0, '首轮没有「未变」可言');
+  assert.equal((await needdo.show({ id: inbox.id })).item.exportPath, null);
+
+  const r2 = await needdo.exportItems({ ids: [inbox.id] });
+  assert.equal(r2.exported, 1, '--ids 能指名任意条目');
+  assert.ok((await needdo.show({ id: inbox.id })).item.exportedAt);
+
+  // --to：落到指定目录，且**不**登记（那是用户的库，归 kb add 管）
+  const custom = join(envDir, 'my-vault');
+  const r3 = await needdo.exportItems({ ids: [done.id], to: custom, redo: true });
+  assert.equal(r3.updated, 1);
+  assert.ok(existsSync(join(custom, (await needdo.show({ id: done.id })).item.exportPath)));
+  assert.equal(r3.registered, false);
+  assert.match(r3.hint, /kb add/);
+  assert.equal((await loadStore()).kb.vaults.length, 1, '只有默认目标根那次登记过');
+});
+
+test('export：无文本的文档跳过；主题做目录名要挡住路径穿越', async () => {
+  freshEnv();
+  // 无文本流的 pdf：能入库，但导不出有意义的内容
+  const f = await needdo.addFileData('p.pdf', Buffer.from('%PDF-1.4\n%%EOF'));
+  await needdo.process({});
+  // 主题由人自定，允许任意字符串——正是路径穿越的入口
+  await needdo.edit({ id: f.id, topic: '../../evil' });
+
+  const r = await needdo.exportItems({});
+  assert.equal(r.exported, 0);
+  assert.equal(r.skipped.length, 1);
+  assert.match(r.skipped[0].reason, /没能提取出文本/);
+  assert.ok(!existsSync(join(envDir, 'evil')), '恶意主题不许把文件写到 export/ 之外');
+
+  // 有文本的文档：正常导出，正文是提取文本 + 原件路径
+  const g = await needdo.addFileData('x.md', Buffer.from('# 一份手记\n正文若干'));
+  await needdo.process({ ids: [g.id] });
+  const r2 = await needdo.exportItems({ ids: [g.id] });
+  assert.equal(r2.exported, 1);
+  const md = readFileSync(join(envDir, 'needdo', 'export', (await needdo.show({ id: g.id })).item.exportPath), 'utf8');
+  assert.match(md, /正文若干/);
+  assert.match(md, /原件:/);
+});
+
+test('export --archive：导出后顺手归档（显式才做）', async () => {
+  freshEnv();
+  const a = await needdo.addText('还躺在收件箱的一条');
+  const r = await needdo.exportItems({ ids: [a.id], archive: true });
+  assert.equal(r.exported, 1);
+  const item = (await needdo.show({ id: a.id })).item;
+  assert.equal(item.status, 'done');
+  assert.ok(item.processedAt);
+
+  // 不给 --archive 就不动归档状态
+  const b = await needdo.addText('第二条');
+  await needdo.exportItems({ ids: [b.id] });
+  assert.equal((await needdo.show({ id: b.id })).item.status, 'inbox');
+});
+
 // ---- 测试用的最小 zip 构造（store 方法，不压缩；CRC 置 0——本仓读取器不校验 CRC） ----
 function makeZip(files) {
   const chunks = [];

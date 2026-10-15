@@ -117,6 +117,8 @@ nx-kn needdo show <id>                                 # 某条的全文（文�
 nx-kn needdo edit <id> --topic 待办事项                  # 改主题：记成「你定的」，规则与 AI 都不再覆盖
 nx-kn needdo remove <id>                               # 删除 = 进回收站（30 天内可恢复）
 nx-kn needdo trash --ids <id> --restore                # 反悔了：恢复回来（--empty 才真删）
+nx-kn needdo export                                    # 沉淀：导出成 markdown 目录 + 登记为知识库
+nx-kn index                                            # 产物已登记，建索引后即可 query 检索
 ```
 
 要让 agent 参与复核（可选，默认**不调 AI**）：

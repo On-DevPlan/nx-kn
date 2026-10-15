@@ -12,6 +12,14 @@
 // round2 增补：条目详情 Modal（全文 + 夹链接可点 + 原件下载）、混排文字的
 // 「含链接」徽标、busy 守卫改 ref（修焦点在外粘贴的竞态）、checkbox 多选批量
 // （选中非空时卡头切换为「已选 N · 归档/还原 · 整理 · 删除」，Gmail/Linear 惯例）。
+// round3 增补：AI 建议一律以「建议」形态呈现（行内徽标 + 详情里的 AI 附注块 +
+// 接受/拒绝按钮），绝不静默应用到主视图；整理级别在弹窗里显式可选（0 = 不调 AI）；
+// 卡头露出 AI 队列与简报命令。
+// round4 增补：检索框（一个词就是全文入口，命中用 <Highlight> 标黄）、编辑入口
+// （只提交真正改动过的字段——无脑整份提交会让「只想改主题」也把正文算成改过）、
+// 回收站（删除是软删除；Modal 里逐条/全部恢复、清空）。过滤与检索词进 localStorage
+// 而不进 URL：App.jsx 的 hash 只承载 view。
+// round5 增补：卡头的「待 AI / AI 建议」徽标可点，直接当过滤器用（徽标即入口）。
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { api } from '../../web/frontend/api/client.js';
 import { CliHints } from '../../web/frontend/components/CliHints.jsx';
@@ -144,6 +152,13 @@ export default function NeedDoView() {
     document.addEventListener('paste', onPaste);
     return () => document.removeEventListener('paste', onPaste);
   }, []);
+
+  // 首次使用的引导：往输入框里填一条**示例**（而不是往 store 里塞演示数据——
+  // 那是往用户的收件箱里拉屎）。填完光标落在末尾，回车即收，一次就学会。
+  function fillSample() {
+    setText('明天下午3点开会 记得带Q4预算\n参考资料 https://example.com/q4-plan');
+    inputRef.current?.focus();
+  }
 
   async function submit() {
     const v = text.trim();
@@ -309,6 +324,22 @@ export default function NeedDoView() {
     });
   }
 
+  // 全部恢复：误删的常见形态是「一次删多了」，逐条点恢复不如一次捞回来。
+  async function restoreAll() {
+    const ids = (trash?.items || []).map((x) => x.id);
+    if (!ids.length) return;
+    await withBusy(async () => {
+      try {
+        const r = await api('/api/needdo/trash', { method: 'POST', body: { ids, restore: true } });
+        toast(`已恢复 ${r.restored} 条`);
+        setTrash(null);
+        await refresh();
+      } catch (e) {
+        toast(String(e.message || e));
+      }
+    });
+  }
+
   function toggleSel(id, on) {
     setSel((s) => {
       const n = new Set(s);
@@ -426,6 +457,27 @@ export default function NeedDoView() {
     });
   }
 
+  // 沉淀：导出成 markdown 目录并登记为知识库（同一 action 的 CLI 是 needdo export）。
+  // 与 crawl 的产品同构——产物是普通 md 目录，索引仍由用户显式跑（不藏在副作用里）。
+  async function exportItems() {
+    await withBusy(async () => {
+      try {
+        const r = await api('/api/needdo/export', { method: 'POST', body: {} });
+        const written = r.exported + r.updated;
+        toast(
+          written
+            ? `已沉淀 ${written} 条（新增 ${r.exported} / 更新 ${r.updated}）→ ${r.dir}`
+            : r.unchanged
+              ? `没有要重写的（${r.unchanged} 条已是最新）`
+              : '没有可沉淀的条目（先把收件箱按主题整理归档）'
+        );
+        await refresh();
+      } catch (e) {
+        toast(String(e.message || e));
+      }
+    });
+  }
+
   // 详情：一条命令拿全上下文（show 的契约——文字给全文、文档给提取文本）。
   async function openDetail(it) {
     await withBusy(async () => {
@@ -487,7 +539,12 @@ export default function NeedDoView() {
     if (!st) return [];
     const needle = q.trim().toLowerCase();
     return st.items
-      .filter((x) => (filter === 'all' ? true : x.status === filter))
+      .filter((x) => {
+        if (filter === 'all') return true;
+        if (filter === 'ai-pending') return x.ai && x.ai.status === 'pending';
+        if (filter === 'ai-suggested') return x.ai && x.ai.status === 'suggested';
+        return x.status === filter;
+      })
       .filter(
         (x) =>
           !needle ||
@@ -508,6 +565,8 @@ export default function NeedDoView() {
   const aiSuggestedCount = st ? st.items.filter((x) => x.ai && x.ai.status === 'suggested').length : 0;
   const aiLevel = aiPending.length ? Math.max(...aiPending.map((x) => x.ai.level || 1)) : 1;
   const briefCmd = `nx-kn needdo brief --level ${aiLevel} --json > brief.json`;
+  // 「可沉淀」= 已归档但还没导出过的条目数（导出过的已是最新，不必再数一遍）
+  const exportable = st ? st.items.filter((x) => x.status === 'done' && !x.exportPath).length : 0;
 
   return (
     <div
@@ -539,6 +598,9 @@ export default function NeedDoView() {
               ))
             )}
             <div className="needdo-detail-acts">
+              <button className="btn ghost" disabled={busy || !trash.count} onClick={restoreAll}>
+                全部恢复
+              </button>
               <button className="btn ghost" disabled={busy || !trash.count} onClick={emptyTrash}>
                 清空回收站
               </button>
@@ -559,6 +621,15 @@ export default function NeedDoView() {
               <span className="tag">{detail.item.status === 'done' ? '已归档' : '收件箱'}</span>
               <span className="muted">{fmtTime(detail.item.addedAt)}</span>
             </div>
+            {detail.item.exportPath ? (
+              <div className="needdo-ai-line muted">
+                已沉淀到知识库：
+                <Copyable text={st?.exportDir ? `${st.exportDir}/${detail.item.exportPath}` : detail.item.exportPath}>
+                  {st?.exportDir ? `${st.exportDir}/${detail.item.exportPath}` : detail.item.exportPath}
+                </Copyable>
+                {detail.item.exportedAt ? ` · ${new Date(detail.item.exportedAt).toLocaleString()}` : ''}
+              </div>
+            ) : null}
             {/* AI 附注：建议永远只在这里展示，接受之后才会写进 topic */}
             {detail.item.ai ? (
               <div className="needdo-ai">
@@ -571,6 +642,14 @@ export default function NeedDoView() {
                     {detail.item.ai.confidence != null ? ` · 置信 ${detail.item.ai.confidence}` : ''}
                     {` · ${AI_STATUS[detail.item.ai.status] || detail.item.ai.status}`}
                   </span>
+                </div>
+                {/* 溯源：这条建议是基于哪一版内容、什么时候、哪一批给的。
+                    「建议过期」在协议里是个真实状态（rev 对不上），把 rev 摆出来，
+                    它对得上对不上就都看得见了。 */}
+                <div className="needdo-ai-line muted">
+                  基于内容版本 {detail.item.ai.rev || '—'}
+                  {detail.item.ai.at ? ` · ${new Date(detail.item.ai.at).toLocaleString()}` : ''}
+                  {detail.item.ai.batchId ? ` · 批次 ${detail.item.ai.batchId}` : ''}
                 </div>
                 {detail.item.ai.topic ? (
                   <div className="needdo-ai-line">建议主题：<b>{detail.item.ai.topic}</b></div>
@@ -632,9 +711,31 @@ export default function NeedDoView() {
               <Spinner />
             ) : (
               <>
-                <span className="tag">{st.inbox} 条待整理</span>
-                {aiPending.length ? <span className="tag">待 AI {aiPending.length}</span> : null}
-                {aiSuggestedCount ? <span className="tag strong">AI 建议 {aiSuggestedCount}</span> : null}
+                <button
+                  className={'tag' + (filter === 'inbox' ? ' strong' : '')}
+                  title="只看收件箱"
+                  onClick={() => setFilter(filter === 'inbox' ? 'all' : 'inbox')}
+                >
+                  {st.inbox} 条待整理
+                </button>
+                {aiPending.length ? (
+                  <button
+                    className={'tag' + (filter === 'ai-pending' ? ' strong' : '')}
+                    title="只看排队等 AI 复核的条目"
+                    onClick={() => setFilter(filter === 'ai-pending' ? 'all' : 'ai-pending')}
+                  >
+                    待 AI {aiPending.length}
+                  </button>
+                ) : null}
+                {aiSuggestedCount ? (
+                  <button
+                    className={'tag' + (filter === 'ai-suggested' ? ' strong' : '')}
+                    title="只看有待复核 AI 建议的条目"
+                    onClick={() => setFilter(filter === 'ai-suggested' ? 'all' : 'ai-suggested')}
+                  >
+                    AI 建议 {aiSuggestedCount}
+                  </button>
+                ) : null}
               </>
             )}
           </div>
@@ -763,6 +864,16 @@ export default function NeedDoView() {
                     回收站 {st.trash}
                   </button>
                 ) : null}
+                {exportable ? (
+                  <button
+                    className="btn small ghost"
+                    disabled={busy}
+                    title="把已归档的条目导出成 markdown 目录，并登记为知识库（产物是普通 md，索引仍需显式跑 nx-kn index）"
+                    onClick={exportItems}
+                  >
+                    沉淀到知识库{exportable ? ` ${exportable}` : ''}
+                  </button>
+                ) : null}
               </>
             )}
           </div>
@@ -779,6 +890,15 @@ export default function NeedDoView() {
             value={q}
             onChange={(e) => setQ(e.target.value)}
           />
+          {filter === 'ai-pending' || filter === 'ai-suggested' ? (
+            <button
+              className="btn small ghost"
+              title="清除 AI 筛选，回到列表过滤"
+              onClick={() => setFilter('all')}
+            >
+              {filter === 'ai-pending' ? '只看：待 AI' : '只看：AI 建议'} ✕
+            </button>
+          ) : null}
           {needle ? (
             <>
               <span className="muted">匹配 {items.length} 条</span>
@@ -791,11 +911,23 @@ export default function NeedDoView() {
 
         {!loading && !items.length && (
           <div className="empty">
-            {needle
-              ? `没有匹配「${needle}」的条目`
-              : filter === 'inbox'
-                ? '收件箱是空的 —— 上面丢一句话进来，或拖个文档进来'
-                : '这个视图下没有条目'}
+            {needle ? (
+              `没有匹配「${needle}」的条目`
+            ) : filter === 'inbox' ? (
+              <>
+                收件箱是空的 —— 上面丢一句话进来，或拖个文档进来
+                <div className="needdo-empty-acts">
+                  <button className="btn small ghost" onClick={fillSample}>
+                    填个示例试试
+                  </button>
+                  <span className="muted">
+                    示例里夹了一个 URL——整行的才是链接条目，夹在文字里的会被抽出来附在条目上
+                  </span>
+                </div>
+              </>
+            ) : (
+              '这个视图下没有条目'
+            )}
           </div>
         )}
 
@@ -828,6 +960,11 @@ export default function NeedDoView() {
                   <span className="tag">未整理</span>
                 )}
                 {it.topicSource === 'ai' ? <span className="tag">主题来自 AI</span> : null}
+                {it.exportPath ? (
+                  <span className="tag" title={`已沉淀: ${it.exportPath}`}>
+                    已沉淀
+                  </span>
+                ) : null}
                 {it.ai && it.ai.status === 'suggested' ? (
                   <span
                     className="tag strong"

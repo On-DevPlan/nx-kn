@@ -8,13 +8,14 @@
 // core/store.js 的事务接口，这里不直接拼路径、不绕过 mutateStore。
 import fsp from 'node:fs/promises';
 import { createHash } from 'node:crypto';
-import { basename, join } from 'node:path';
+import { basename, dirname, join, resolve } from 'node:path';
 import {
   NEEDDO_FILE_EXTS,
   NEEDDO_FILE_MAX_BYTES,
   NEEDDO_TRASH_MAX_DAYS,
   NEEDDO_TRASH_MAX_ITEMS,
   needdoDir,
+  needdoExportDir,
   needdoTrashDir,
 } from '../../core/paths.js';
 import { loadStore, mutateStore, newId } from '../../core/store.js';
@@ -239,6 +240,8 @@ export async function list({ status, topic, kind, q, limit, deep } = {}) {
     // （core/modules 的 Node 侧代码不能进浏览器包）。复制一份清单迟早与
     // classifyTopic 分叉，让服务端说了算就没有第二份。
     topics: TOPICS,
+    // 沉淀目标根也随列表下发：面板要把「已沉淀到哪」显示成完整路径给人复制
+    exportDir: needdoExportDir(),
     items,
   };
 }
@@ -718,6 +721,219 @@ export async function archive({ id, ids, undo } = {}) {
   });
 }
 
+// ---- 沉淀：导出到知识库（round5）----
+//
+// 模具照 crawl：「产物落成普通 markdown 目录 → 自动登记为知识库 → 让人自己跑 index」。
+// 差别只有一处：crawl 的源在远端，NeedDo 的源就是 store 自己——所以**不建第二份清单**
+// （crawl 需要 manifest 是因为「远端已删页面」推不出来；这里源头就在手边），
+// 权威记录放条目侧：`exportPath` / `exportRev` / `exportedAt`。
+//
+// 三条纪律（都不是新发明的取舍）：
+//   · 严格单向：导出物是产物（可重建，同 sources/ 的定位）。人在 vault 里改了那份 md
+//     不回流——要改就改条目再 --redo。本仓没有任何双向同步先例，也不在这开这个头。
+//   · 不搬已落盘的文件：路径首次导出时定死；`--redo` 只刷内容，不因主题改了搬家
+//     （Readwise Mirror 改文件名规则直接打断已有内部链接，是实证过的代价）。
+//   · 判据用**条目指纹**而不是产物文件哈希：frontmatter 里的 exportedAt 每次都变，
+//     拿它算哈希会永远「变了」（crawl 把 frontmatter 排除在哈希外，同一个理由）。
+
+const SLUG_MAX = 40;
+
+// 文件名清洗：标题里什么都可能有。`\/:*?"<>|` 是各平台禁用的文件名字符；
+// 空白压成连字符；去掉首尾的点与横线（`..`、隐藏文件、开头就一个横线都不好看）。
+function slugOf(title) {
+  const s = String(title || '')
+    .replace(/[\\/:*?"<>|]/g, ' ')
+    .replace(/\s+/g, '-')
+    .replace(/-{2,}/g, '-')
+    .replace(/^[-.\s]+/, '')
+    .slice(0, SLUG_MAX)
+    .replace(/[-.\s]+$/, '');
+  return s || 'entry';
+}
+
+// 主题做目录名：`needdo edit --topic` 允许自定主题，`../../x` 这种值就是路径穿越
+// （写文件会跑到 export/ 之外，登记库更是把别的目录塞进索引）。清洗 + 兜底。
+function safeTopicDir(topic) {
+  const s = String(topic || '')
+    .replace(/[\\/:*?"<>|]/g, '-')
+    .replace(/^[-.\s]+|[-.\s]+$/g, '')
+    .slice(0, SLUG_MAX)
+    .replace(/^[-.\s]+|[-.\s]+$/g, '');
+  return !s || s === '.' || s === '..' ? '未分类' : s;
+}
+
+// YAML 标量转义：与 crawl/service.js 的 yamlScalar 同款（标题可能带冒号、井号、引号，
+// 直接塞进 frontmatter 会破坏解析）。刻意抄这五行而不是把它下沉到 core/：
+// 那是跨域重构，收益不抵风险——但**改一处时记得看另一处**。
+function yamlScalar(v) {
+  const s = String(v ?? '').replace(/\s+/g, ' ').trim();
+  if (!s) return '""';
+  if (/^[A-Za-z0-9一-龥][^:#"'\n]*$/.test(s)) return s;
+  return '"' + s.replace(/\\/g, '\\\\').replace(/"/g, '\\"') + '"';
+}
+
+// 给产物 frontmatter 用的 URL：link 条目是自己的网址；文字条目取首个夹链接。
+function urlOf(item) {
+  if (item.kind === 'link') return item.content;
+  return (item.links && item.links[0]) || null;
+}
+
+function localDate(at) {
+  const p2 = (n) => String(n).padStart(2, '0');
+  return `${at.getFullYear()}-${p2(at.getMonth() + 1)}-${p2(at.getDate())}`;
+}
+
+// 导出正文。文档条目**只写 md、不搬原件**；提取不出文本的直接跳过——
+// 一篇没有正文的产物进了检索库，除了噪音什么都不是。
+async function exportBodyOf(item) {
+  if (item.kind === 'file') {
+    const text = await fullTextOf(item);
+    if (!text || !text.trim()) return null;
+    return `${text.trim()}\n\n---\n\n原件: ${filePathOf(item)}\n`;
+  }
+  const body = String(item.content || '').trim();
+  return body ? body + '\n' : null;
+}
+
+function exportMarkdown(item, body, exportedAt) {
+  const fm = [
+    '---',
+    `id: ${yamlScalar(item.id)}`, // 稳定键：从文件能 grep 回源条目（Readwise 的 uri 追踪属性同款）
+    'source: needdo',
+    `title: ${yamlScalar(item.title)}`,
+    `topic: ${yamlScalar(item.topic || '未分类')}`,
+    `kind: ${item.kind}`,
+  ];
+  const url = urlOf(item);
+  if (url) fm.push(`url: ${yamlScalar(url)}`);
+  fm.push(`addedAt: ${item.addedAt || ''}`, `exportedAt: ${exportedAt}`, '---');
+  return `${fm.join('\n')}\n\n# ${item.title}\n\n${body}`;
+}
+
+async function fileExists(p) {
+  try {
+    await fsp.stat(p);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+// 导出（沉淀）。默认选区 = **全部已归档条目**——与「整理 → 沉淀」的漏斗一致，
+// 且与 crawl run 的重跑语义对齐：跑一次就重新检查一遍，由指纹决定谁是
+// 新增（exported）/ 内容变过（updated）/ 没变（unchanged），而不是把已导出的
+// 悄悄排除掉（那样 unchanged 永远报不出来，用户也看不到「有没有人要重写」）。
+// `--ids` 可指名任意条目（含还在收件箱的）；`--redo` = 忽略指纹强制重写
+// （crawl 的 `run --rebuild` 同位）。
+export async function exportItems({ ids, topic, redo, to, archive } = {}) {
+  const root = to ? resolve(String(to)) : needdoExportDir();
+  const at = new Date();
+  const exportedAt = at.toISOString();
+  const store = await loadStore();
+  const wanted = Array.isArray(ids) ? new Set(ids) : ids ? new Set([ids]) : null;
+
+  let picked;
+  if (wanted) {
+    picked = itemsOf(store).filter((x) => wanted.has(x.id));
+  } else {
+    picked = itemsOf(store).filter((x) => x.status === 'done');
+  }
+  if (topic) picked = picked.filter((x) => x.topic === topic);
+  picked = picked.slice().sort((a, b) => String(a.addedAt).localeCompare(String(b.addedAt)));
+
+  const out = {
+    exported: 0,
+    updated: 0,
+    unchanged: 0,
+    skipped: [],
+    missing: [],
+    dir: root,
+    registered: false,
+    archive: !!archive,
+  };
+  const records = [];
+
+  for (const it of picked) {
+    const rev = revOf(it);
+    const prevPath = it.exportPath || null;
+    // 幂等：内容没变、产物文件还在 → 不动（与 crawl run 的 unchanged 同义）
+    if (!redo && prevPath && it.exportRev === rev && (await fileExists(join(root, prevPath)))) {
+      out.unchanged++;
+      continue;
+    }
+    const body = await exportBodyOf(it);
+    if (body === null) {
+      out.skipped.push({ id: it.id, reason: it.kind === 'file' ? '文档没能提取出文本' : '条目没有正文' });
+      continue;
+    }
+    // 路径首次定死（不因主题变了搬家）；新条目才按 主题/日期-slug-id.md 生成
+    const rel = prevPath || join(safeTopicDir(it.topic), `${localDate(at)}-${slugOf(it.title)}-${it.id}.md`);
+    try {
+      await fsp.mkdir(dirname(join(root, rel)), { recursive: true });
+      await fsp.writeFile(join(root, rel), exportMarkdown(it, body, exportedAt), 'utf8');
+    } catch (e) {
+      out.skipped.push({ id: it.id, reason: `写文件失败: ${(e && e.code) || (e && e.message) || e}` });
+      continue;
+    }
+    records.push({ id: it.id, path: rel, rev, wasNew: !prevPath });
+    if (prevPath) out.updated++;
+    else out.exported++;
+  }
+
+  if (wanted) {
+    out.missing = [...wanted].filter((id) => !itemsOf(store).some((x) => x.id === id));
+  }
+
+  // 写回条目（一次事务）+ 登记为知识库。登记只在**默认目标根**下做：
+  // `--to` 指向的很可能是用户自己的 vault，那该由 `kb add` 管（用户的库归用户）。
+  if (records.length || out.archive) {
+    const recById = new Map(records.map((r) => [r.id, r]));
+    const written = await mutateStore((s) => {
+      let touched = 0;
+      for (const it of itemsOf(s)) {
+        const rec = recById.get(it.id);
+        if (rec) {
+          it.exportedAt = exportedAt;
+          it.exportPath = rec.path;
+          it.exportRev = rec.rev;
+          touched++;
+        }
+        if (archive && rec && it.status !== 'done') {
+          it.status = 'done';
+          if (!it.processedAt) it.processedAt = exportedAt;
+        }
+      }
+      // 有内容才登记：空目录进库列表只会让人困惑（crawl 的同一条判断）
+      if (!to && touched > 0) {
+        const abs = resolve(root);
+        const existing = s.kb.vaults.find((v) => resolve(String(v.path)) === abs);
+        if (!existing) {
+          s.kb.vaults.push({
+            path: root,
+            name: 'needdo-export',
+            model: null,
+            addedAt: exportedAt,
+            // origin 用既有的 'user'：这是「我确认要它」的显式导出动作，
+            // 与 crawl 的产物（可能被 standby 规则排除）不是一回事，也**不新增枚举值**。
+            origin: 'user',
+          });
+          out.registered = true;
+        }
+      }
+      return touched;
+    });
+    out.touched = written;
+  }
+
+  out.hint = to
+    ? `目标根是你指定的目录，没有自动登记——要检索它：${'nx-kn kb add ' + root}`
+    : out.registered
+      ? `已登记为知识库 [needdo-export]，建索引：nx-kn index`
+      : `建索引：nx-kn index（已登记为知识库 [needdo-export]）`;
+  return out;
+}
+// 返回被淘汰的条目（调用方据此真删文件）——淘汰规则写在写入路径上，
+// 不需要额外的清理任务。
 // 淘汰：回收站里的条目按删除时间保留，超期或超量就从旧到新丢。
 // 返回被淘汰的条目（调用方据此真删文件）——淘汰规则写在写入路径上，
 // 不需要额外的清理任务。

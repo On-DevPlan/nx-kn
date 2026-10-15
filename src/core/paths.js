@@ -102,6 +102,16 @@ export function needdoTrashDir() {
 export const NEEDDO_TRASH_MAX_DAYS = 30;
 export const NEEDDO_TRASH_MAX_ITEMS = 200;
 
+// ---- 沉淀（导出到知识库）----
+//
+// 导出物是**普通 markdown 目录**，与 crawl 的产物逐字同构（同一套模具：落盘 → 自动登记
+// 为知识库 → 让人自己跑 index）。目标根**只能是 needdo/export/**，绝不能是 needdo/ 本身——
+// 那里装着原件二进制、提取 txt、trash/ 与 processed/ 报告，登记它等于把回收站和流水
+// 报告一起塞进索引（排除名单只有 .obsidian/.trash，挡不住）。
+export function needdoExportDir() {
+  return join(needdoDir(), 'export');
+}
+
 // ---- 守护（watch）----
 //
 // 监听已登记的库，笔记一变就自动跑增量索引。这里只放「防抖窗口」这一个参数。

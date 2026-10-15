@@ -1,6 +1,6 @@
 // 面板壳：tab 导航 + 当前视图。**这个文件几乎不需要改**——
 // 新增面板 = 在 registry.js 登记一行 + 写一个 view.jsx。
-import { Suspense, useEffect } from 'react';
+import { Suspense, useEffect, useRef } from 'react';
 import { VIEWS } from './registry.js';
 import { useStore } from './store.jsx';
 import { ErrorBoundary, Spinner } from './components/ui.jsx';
@@ -26,18 +26,39 @@ export default function App() {
   }, [refreshBoot]);
 
   // 启动时把 hash 同步进 store；后续切换时也回写 hash（可分享、可后退）
+  //
+  // ⚠️ 两个 effect 是**有先后约定**的，别把它们看成各自独立：
+  // 下面这个（[] 只跑一次）负责「深链优先」，紧接着那个（[ui.view]）负责「回写」。
+  // 历史 bug：两者在首帧同时开火——回写那个拿的是**尚未被深链改写**的 ui.view，
+  // 于是 `location.hash = '#/' + 旧view` 把刚打开的深链覆盖掉，还顺带触发
+  // hashchange 把 view 又改回去。症状是「深链永远失效」+「地址栏闪一下首页」
+  // （NeedDo 的走查里复现过：带持久化 view 时开 #/kb 最终停在旧 tab；
+  //  即便清空 localStorage，#/kb 也会被拽回 #/home）。
+  // 修法：回写那个 effect 在**第一次运行时只认领、不写**，把首帧让给深链。
+  const hydrating = useRef(true);
   useEffect(() => {
-    const fromHash = viewFromHash();
-    if (fromHash && fromHash !== ui.view) patchUi({ view: fromHash });
+    const id = viewFromHash();
+    // 只认注册过的独立 tab：`#/crawl`（嵌入视图）或任何垃圾 hash 都回落到持久化的 view
+    const valid = VIEWS.some((v) => v.tab !== false && v.id === id);
+    if (valid) patchUi({ view: id });
     else if (!location.hash && ui.view) location.hash = '#/' + ui.view;
   }, []);
 
   useEffect(() => {
+    if (hydrating.current) {
+      hydrating.current = false; // 启动那一帧不抢：深链说了算
+      return;
+    }
     if (ui.view) location.hash = '#/' + ui.view;
   }, [ui.view]);
 
   useEffect(() => {
-    const onHash = () => patchUi({ view: viewFromHash() });
+    const onHash = () => {
+      const id = viewFromHash();
+      // 只认注册过的独立 tab：手改地址栏写了个垃圾 hash 时，让它渲染回落即可，
+      // 别把垃圾值写进持久化的 ui.view（下一次刷新会「记住」它）。
+      if (VIEWS.some((v) => v.tab !== false && v.id === id)) patchUi({ view: id });
+    };
     window.addEventListener('hashchange', onHash);
     return () => window.removeEventListener('hashchange', onHash);
   }, [patchUi]);

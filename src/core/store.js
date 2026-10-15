@@ -362,6 +362,11 @@ function normalizeNeeddoItem(it) {
     processedAt: it.processedAt ? String(it.processedAt) : null,
     // 只有回收站里的条目有值；在册条目恒为 null（删除时写上，恢复时清掉）。
     deletedAt: it.deletedAt ? String(it.deletedAt) : null,
+    // 沉淀（导出到知识库）的三个字段。必须在白名单里——归一化是逐字段重建的，
+    // 漏一个就等于「导出记录被静默抹掉」，下次 export 会当成没导过、重复导一遍。
+    exportedAt: it.exportedAt ? String(it.exportedAt) : null,
+    exportPath: it.exportPath ? String(it.exportPath) : null,
+    exportRev: it.exportRev ? String(it.exportRev) : null,
   };
 }
 

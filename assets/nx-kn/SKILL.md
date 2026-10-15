@@ -68,6 +68,7 @@ CLI 与 Web 面板共享同一份 action 声明。需要时还能把**文档站�
 | `nx-kn needdo archive <id> [--undo] [--ids a,b]` | 归档（移出收件箱视野，数据保留）；`--undo` 还原 |
 | `nx-kn needdo remove [id] [--ids a,b] [--all]` | 移除条目（**进回收站**，不是立刻抹掉；原件一起搬进 `needdo/trash/`） |
 | `nx-kn needdo trash [--ids a,b --restore] [--empty]` | 回收站：默认列出；`--restore` 恢复；`--empty` 清空（真删）。超 30 天或超 200 条自动淘汰 |
+| `nx-kn needdo export [--ids a,b] [--topic T] [--redo] [--to <目录>] [--archive]` | **沉淀**：导出成 markdown 落进 `<数据目录>/needdo/export/<主题>/` 并自动登记为知识库（默认跑全部已归档条目，按内容指纹报新增/更新/未变）；`--to` 换目标根则只落盘不登记） |
 | `nx-kn watch [--debounce ms]` | **守护**：常驻监听各库，笔记一变就自动增量索引（Ctrl+C 停）。改完笔记要立刻搜到就用它 |
 | `nx-kn watch status` | 守护状态：是否在跑、监听哪些库、最近刷新记录 |
 | `nx-kn serve [--port N] [--no-open] [--no-watch]` | 启动 Web 面板（**默认带守护**；`--no-watch` 关掉，面板上也有开关） |
@@ -209,6 +210,22 @@ nx-kn needdo review --ids <id1>,<id2> --json     # 接受（--reject 拒绝）
 
 **找、改、撤**（日常三件事）：
 
+**沉淀**（把整理好的条目变成可检索的知识）：导出物是**普通 markdown 目录**，与资料采集的
+产物逐字同构，只是目标根固定在 `<数据目录>/needdo/export/`：
+
+```bash
+nx-kn needdo export                    # 全部已归档条目 → export/<主题>/<日期>-<标题>-<id>.md，并登记为知识库
+nx-kn needdo export --ids nd_x         # 指名导出（可含还在收件箱的条目）
+nx-kn needdo export --redo             # 内容以条目为准强制重写（路径不变，不搬家）
+nx-kn needdo export --to D:\MyVault    # 换目标根：只落盘、不自动登记（那是你的库，用 kb add 管）
+nx-kn index                            # 产物已登记为知识库，建索引后即可 query
+```
+
+三条约定：**严格单向**（导出物是产物，人在库里改了它不回流——要改就改条目再 `--redo`）；
+**不搬家**（首次导出定死路径，改主题也不移动文件，避免打断别的笔记对它的链接）；
+**判据用条目指纹**（frontmatter 里的 `exportedAt` 每次都变，拿它算哈希会永远「变了」）。
+文档条目只写 md、不搬原件；**提取不出文本的文档会被跳过**（没有正文的产物进库只是噪音）。
+
 ```bash
 nx-kn needdo list "报销" --json          # 一个词就是全文入口（标题/摘录/正文/主题/夹链接）
 nx-kn needdo list "关键节点" --deep       # 连文档提取正文一起搜（读盘，慢）
@@ -275,6 +292,10 @@ nx-kn needdo trash --empty                # 确定不要了：真删（含原件
 - 删除是**软删除**：条目落 `needdo.trash[]`（同一形状 + `deletedAt`），原件搬进
   `<数据目录>/needdo/trash/`；超 30 天或超 200 条按删除时间从旧到新自动淘汰，
   `needdo trash --empty` 立刻真删
+- 沉淀产物在 `<数据目录>/needdo/export/<主题>/*.md`（frontmatter：`id`/`source`/`title`/`topic`/
+  `kind`/`url?`/`addedAt`/`exportedAt`），并自动登记为知识库 `[needdo-export]`（`origin: 'user'`——
+  显式导出的动作，不是 crawl 那种可能被 standby 规则排除的产物）。条目侧记 `exportedAt`/
+  `exportPath`/`exportRev`（三者在 store 白名单里，缺一个就会让下次导出重复导一遍）
 - 环境变量 `NX_KN_VAULT` 可临时指定「只看这一个目录」（不落盘、不改列表）
 - 环境变量 `NX_KN_CRAWL_DELAY_MS` 改抓取间隔（默认 300ms）
 - 索引落在各库自己的 `<vault>/.zvec-grep/`（zg 拥有；删掉它 = 那个库回到未索引状态）
