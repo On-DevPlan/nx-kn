@@ -7,6 +7,13 @@ pnpm install
 pnpm start    # 构建并启动面板
 ```
 
+`nx-kn serve` 默认会打开浏览器；**端口被占时不会报错退出**：
+
+- 占用者**就是本项目的面板** → 直接复用它（不重复起进程），并打开它；
+- 占用者是别的服务 → 顺延到**下一个空闲端口**起自己的面板，并打开它。
+
+`--no-open` 只关这一次；`NX_SERVE_NO_OPEN=1`（`true` / `yes` / `on` 同义）则是**所有 nx-xx 项目共用**的全局开关，设为真值后 `serve` 完全不开浏览器。
+
 ## 它是什么
 
 把本机的若干 Obsidian vault 当成知识库，用 [zvec-grep](https://github.com/zvec-ai/zvec-grep)（CLI 名 `zg`）

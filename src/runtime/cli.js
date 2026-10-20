@@ -19,7 +19,7 @@ const BUILTINS = [
   {
     id: 'serve',
     cli: ['serve'],
-    summary: '启动 Web 面板',
+    summary: '启动 Web 面板（默认 :7881；--port N 改端口；--no-open 不开浏览器；端口上已有本面板则直接打开它；NX_SERVE_NO_OPEN=1 全局不开浏览器）',
     flags: {
       port: { type: 'number', default: DEFAULT_PORT },
       'no-open': { type: 'boolean' },
@@ -261,8 +261,37 @@ function printCommandHelp(cmd) {
 async function cmdServe(ctx) {
   const { startServer } = await import('./server.js');
   const { openBrowser } = await import('../core/open.js');
+  const { autoOpenEnabled, resolvePortConflict, describeOccupant } = await import('../core/serve-port.js');
+  const host = '127.0.0.1';
   const port = ctx.port || DEFAULT_PORT;
-  const server = await startServer({ port, host: '127.0.0.1' });
+  // --no-open 与 NX_SERVE_NO_OPEN 都看这里：任一为真即完全不开浏览器。
+  const canOpen = autoOpenEnabled(ctx['no-open']);
+
+  let server;
+  try {
+    server = await startServer({ port, host });
+  } catch (err) {
+    if (!err || err.code !== 'EADDRINUSE') throw err;
+
+    // 端口被占：先问一句「上面跑的是不是我」。
+    const decision = await resolvePortConflict(port, APP_NAME, host);
+
+    if (decision.action === 'reuse') {
+      // 自己的面板已经在跑：不重复启动，直接把浏览器指过去。
+      const addr = `http://${host}:${port}`;
+      console.log(APP_NAME + ' 已在运行：' + addr);
+      console.log('直接打开浏览器（不重复启动）；如需重启请先停掉旧实例');
+      if (canOpen) openBrowser(addr);
+      return;
+    }
+
+    // 别人占的：顺延到下一个空闲端口，再起自己的面板。
+    console.log(
+      `端口 ${port} 已被占用（占用者: ${describeOccupant(decision.occupant)}），改用 ${decision.port}`
+    );
+    server = await startServer({ port: decision.port, host });
+  }
+
   const addr = `http://127.0.0.1:${server.address().port}`;
 
   console.log(appHead() + ' v' + VERSION);
@@ -292,7 +321,7 @@ async function cmdServe(ctx) {
   console.log('CLI:    ' + APP_NAME + ' help（每个按钮都有对应命令，agent 可加 --json）');
   console.log('按 Ctrl+C 停止');
 
-  if (!ctx['no-open']) openBrowser(addr);
+  if (canOpen) openBrowser(addr);
 
   const shutdown = async () => {
     console.log('\n正在停止...');

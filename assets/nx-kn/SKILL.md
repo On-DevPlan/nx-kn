@@ -71,7 +71,7 @@ CLI 与 Web 面板共享同一份 action 声明。需要时还能把**文档站�
 | `nx-kn needdo export [--ids a,b] [--topic T] [--redo] [--to <目录>] [--archive]` | **沉淀**：导出成 markdown 落进 `<数据目录>/needdo/export/<主题>/` 并自动登记为知识库（默认跑全部已归档条目，按内容指纹报新增/更新/未变）；`--to` 换目标根则只落盘不登记） |
 | `nx-kn watch [--debounce ms]` | **守护**：常驻监听各库，笔记一变就自动增量索引（Ctrl+C 停）。改完笔记要立刻搜到就用它 |
 | `nx-kn watch status` | 守护状态：是否在跑、监听哪些库、最近刷新记录 |
-| `nx-kn serve [--port N] [--no-open] [--no-watch]` | 启动 Web 面板（**默认带守护**；`--no-watch` 关掉，面板上也有开关） |
+| `nx-kn serve [--port N] [--no-open] [--no-watch]` | 启动 Web 面板（**默认带守护**；`--no-watch` 关掉，面板上也有开关）。端口被占时：占用者**就是本面板**就复用并打开它，占用者是别的服务就顺延到下一个空闲端口再打开；`--no-open` 或 `NX_SERVE_NO_OPEN=1` 不开浏览器 |
 | `nx-kn routes` | CLI 命令 ↔ HTTP 路由对照表（agent 摸底从这里开始） |
 | `nx-kn help [topic]` | 帮助；`help --json` 输出可解析命令表 |
 | `nx-kn health` | 自检 |
