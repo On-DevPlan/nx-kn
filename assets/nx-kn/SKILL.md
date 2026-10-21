@@ -64,6 +64,9 @@ CLI 与 Web 面板共享同一份 action 声明。需要时还能把**文档站�
 | `nx-kn help [topic]` | 帮助；`help --json` 输出可解析命令表 |
 | `nx-kn health` | 自检 |
 | `nx-kn settings get` / `set k=v...` | 读写设置（白名单外的键被拒绝） |
+| `nx-kn obsidian get` | 读 obsidian 配置与解析后的路径（vault 来源、规范目录、文档存在性） |
+| `nx-kn obsidian set k=v...` | 写 obsidian 配置：`vault=<绝对路径>` / `specDir=<vault内相对路径>` / `contentDoc=` / `questionnaireDoc=`（空值=复位；白名单外的键被拒绝） |
+| `nx-kn obsidian spec` | 解析内容规范文档的绝对路径（content / questionnaire 两份）——`kn-obsidian-repair-unresolved-links` skill 运行时第一步跑它 |
 | `nx-kn skill install [name] [--to 目录] [--force]` | 把用法装给本机 agent（默认 `~/.claude/skills`；无 [name] 装默认 skill） |
 | `nx-kn skill install --group=<key> [--to 目录] [--force]` | 一键装某个 group（来自 `assets/groups.json`；与 [name] 互斥） |
 | `nx-kn skill list` | 列出可装的 skill + group（含默认 install 标记；`groups.json` 缺失时降级到目录扫描） |
@@ -208,6 +211,13 @@ nx-kn 不再维护混乱输入的「收件箱」域——它已迁到 **nx-sk �
   增量清单是各源目录内的 `.nx-kn-crawl.json`（`url → { file, hash }`）
 - `sources/` 跟着 store 走（同一个数据目录），所以 `NX_KN_STORE` / `--store` 一次搬动全部数据
 - 环境变量 `NX_KN_VAULT` 可临时指定「只看这一个目录」（不落盘、不改列表）
+- obsidian 域配置在 `obsidian{}`：`vault`（绝对路径）/ `specDir`（vault 内相对路径，默认
+  `nx-kn`）/ `contentDoc`（默认 `base-content.md`）/ `questionnaireDoc`（默认 `questionnaire.md`）
+  ——这四项指向的是**内容规范文档**（笔记怎么写），由用户自己在 vault 里维护、可随时改；
+  `kn-obsidian-repair-unresolved-links` skill 运行时用 `nx-kn obsidian spec` 解析它们的位置
+- vault 解析链：`store.obsidian.vault` > 环境变量 `NX_OBSIDIAN_VAULT`（skill 自带的 python
+  脚本也认它）> 第一个含 `.obsidian/` 的 `kb.vaults[]` 登记库 > 未设置。**兜底只在「未设置」
+  时发生**：设了却指错地方会如实报「目录不存在」，不会悄悄换成另一个库
 - 环境变量 `NX_KN_CRAWL_DELAY_MS` 改抓取间隔（默认 300ms）
 - 索引落在各库自己的 `<vault>/.zvec-grep/`（zg 拥有；删掉它 = 那个库回到未索引状态）
 - 删除数据 = 删 store.json（无隐藏状态）

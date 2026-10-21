@@ -8,7 +8,7 @@
     },
     "kn-obsidian-repair-unresolved-links": {
       "skills": ["kn-obsidian-repair-unresolved-links"],
-      "summary": "Obsidian 未解析双链补全：扫描未解析 [[]]、生成合规 frontmatter、批量创建笔记、postcheck 校验内部双链全套 SOP"
+      "summary": "Obsidian 未解析双链补全：扫描未解析 [[]]、生成合规 frontmatter、批量创建笔记、postcheck 校验内部双链全套 SOP；内容/问卷规范从 vault 读取（路径由 nx-kn obsidian spec 解析）"
     }
   }
 }

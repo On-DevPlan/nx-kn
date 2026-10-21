@@ -4,7 +4,7 @@
 // 所以「面板上有按钮、CLI 里没命令」在结构上不可能发生。
 import { ACTIONS } from './registry.js';
 import { compileRoute, applySpec } from './spec.js';
-import { toErrorPayload, httpStatusOf, CODES } from '../core/errors/index.js';
+import { toErrorPayload, httpStatusOf, CODES, badInput } from '../core/errors/index.js';
 
 // 逐段比较两条模式，决定谁该先匹配：**字面量段优先于参数段**，段数多的优先。
 //
@@ -58,11 +58,22 @@ async function readBody(req) {
   let size = 0;
   for await (const c of req) {
     size += c.length;
-    if (size > 4 * 1024 * 1024) throw new Error('请求体过大');
+    if (size > 4 * 1024 * 1024) throw badInput('请求体过大（上限 4MB）');
     chunks.push(c);
   }
+  // 空 body 是合法的（很多 POST 不带参数）——与「body 坏了」是两回事，别混。
   if (!chunks.length) return {};
-  return JSON.parse(Buffer.concat(chunks).toString('utf8'));
+  // 坏 JSON **必须报错**，不能当成空 body。
+  //
+  // 曾经的写法是 `.catch(() => ({}))`：解析失败一律降级成空对象，于是
+  // 「请求体被截断 / 编码坏了」变成了「参数为空」——action 收到空 patch，
+  // 返回 skipped，HTTP 200，界面上弹「已保存」，**实际什么都没写**。
+  // 这类「静默失效」比直接报错难查得多：用户看到的是成功的提示。
+  try {
+    return JSON.parse(Buffer.concat(chunks).toString('utf8'));
+  } catch (e) {
+    throw badInput(`请求体不是合法 JSON: ${(e && e.message) || e}`);
+  }
 }
 
 // 跨站防护。服务虽然只绑 127.0.0.1，但用户浏览器里的任意页面都能向它发起请求——
@@ -104,7 +115,8 @@ export async function handleApi(req, res, url) {
       if (method === 'GET' || method === 'HEAD') {
         for (const [k, v] of url.searchParams) raw[k] = v;
       } else {
-        Object.assign(raw, await readBody(req).catch(() => ({})));
+        // 解析失败要冒出去（400），不能降级成空 body —— 见 readBody 的注释。
+        Object.assign(raw, await readBody(req));
       }
       const data = await action.run(applySpec(action, raw), { transport: 'http' });
       sendJson(res, 200, { ok: true, data });

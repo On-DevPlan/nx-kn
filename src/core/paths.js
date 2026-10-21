@@ -131,6 +131,27 @@ export function defaultEmbeddingFromEnv() {
 }
 
 
+// ---- obsidian 域（vault 定位 + skill 规范文档在 vault 内的位置）----
+//
+// 供 src/modules/obsidian（配置的唯一写入口）与 kn-obsidian-repair-unresolved-links
+// 的内容规范解析共同使用。
+//
+// 环境变量沿用 skill 自带 Python 脚本已在用的 NX_OBSIDIAN_VAULT——
+// 一个变量同时管住 JS 侧与脚本侧，不另造第二个旋钮。
+// 注意别和上面的 NX_KN_VAULT 混：那个只服务 kb 域（检索索引）。
+export const OBSIDIAN_VAULT_ENV = 'NX_OBSIDIAN_VAULT';
+
+// 规范文档的默认位置：<vault>/nx-kn/ 下两个固定文件名。
+// 常量放这里而不是模块里：store.js 的 initialState() 补默认值也要用它。
+export const OBSIDIAN_DEFAULT_SPEC_DIR = 'nx-kn';
+export const OBSIDIAN_DEFAULT_CONTENT_DOC = 'base-content.md';
+export const OBSIDIAN_DEFAULT_QUESTIONNAIRE_DOC = 'questionnaire.md';
+
+export function obsidianVaultFromEnv() {
+  const v = process.env[OBSIDIAN_VAULT_ENV];
+  return v && String(v).trim() ? String(v).trim() : null;
+}
+
 // 测试必须能指向临时目录，否则会写脏用户的真实数据。
 export const STORE_ENV = 'NX_KN_STORE';
 

@@ -13,6 +13,9 @@ import {
   APP_NAME,
   CRAWL_ENGINES,
   DEFAULT_CRAWL_ENGINE,
+  OBSIDIAN_DEFAULT_CONTENT_DOC,
+  OBSIDIAN_DEFAULT_QUESTIONNAIRE_DOC,
+  OBSIDIAN_DEFAULT_SPEC_DIR,
   sourceDirOf,
   storePathFromEnv,
 } from './paths.js';
@@ -36,6 +39,17 @@ export function initialState() {
     // 每页的 url→{file,hash} 映射写在源目录内的 .nx-kn-crawl.json，
     // 不塞进 store（几百页的映射会让这个文件变得又大又吵）。
     crawl: { sources: [] },
+    // obsidian 域（modules/obsidian）：vault 在哪、规范文档在 vault 内的哪里。
+    //
+    // 规范文档（内容生成规范 / 问卷规范）刻意**不打包进 skill**：
+    // 用户要随时改它，所以 skill 运行时到这里解析路径、去 vault 里现读。
+    // 这就是「skill 与内容要求解耦」的落点——改规范不用重装 skill。
+    obsidian: {
+      vault: '', // 绝对路径；空 = 未设定（运行时按 env → kb 兜底链解析）
+      specDir: OBSIDIAN_DEFAULT_SPEC_DIR, // vault 内相对路径
+      contentDoc: OBSIDIAN_DEFAULT_CONTENT_DOC, // 裸文件名
+      questionnaireDoc: OBSIDIAN_DEFAULT_QUESTIONNAIRE_DOC,
+    },
   };
 }
 
@@ -169,7 +183,7 @@ export function normalize(data) {
 
   // 其余顶层键：base 里声明过的按 base 的形状兜底，没声明过的原样带过来
   for (const [k, v] of Object.entries(data)) {
-    if (k === 'version' || k === 'settings' || k === 'kb' || k === 'crawl') continue;
+    if (k === 'version' || k === 'settings' || k === 'kb' || k === 'crawl' || k === 'obsidian') continue;
     if (Array.isArray(v)) {
       base[k] = v;
     } else if (v && typeof v === 'object') {
@@ -184,7 +198,28 @@ export function normalize(data) {
   // `vaults` 则永远拿不到值。所以迁移必须在这里做完。
   base.kb = normalizeKb(data.kb);
   base.crawl = normalizeCrawl(data.crawl);
+  base.obsidian = normalizeObsidian(data.obsidian);
   return base;
+}
+
+// ---- obsidian 域的结构化归一化 ----
+//
+// 归一化**永不抛**（每次 load 都会跑）：垃圾输入回落默认值，
+// 合法性由 obsidian set 的写入口负责（那边抛 INVALID_INPUT / NOT_FOUND）。
+//
+// 为什么要专用分支：上面那个通用分支对对象只做浅合并，
+// `obsidian` 若是字符串/数字还会被整个替换掉——这里必须把它拉回固定形状。
+export function normalizeObsidian(raw) {
+  const src = raw && typeof raw === 'object' ? raw : {};
+  const str = (v, fallback) =>
+    typeof v === 'string' && v.trim() ? v.trim().replace(/\\/g, '/') : fallback;
+  return {
+    // vault 是绝对路径，按用户写的原样存（分隔符交给 resolve 处理）
+    vault: typeof src.vault === 'string' ? src.vault.trim() : '',
+    specDir: str(src.specDir, OBSIDIAN_DEFAULT_SPEC_DIR),
+    contentDoc: str(src.contentDoc, OBSIDIAN_DEFAULT_CONTENT_DOC),
+    questionnaireDoc: str(src.questionnaireDoc, OBSIDIAN_DEFAULT_QUESTIONNAIRE_DOC),
+  };
 }
 
 // ---- kb 域的结构化归一化 ----

@@ -70,6 +70,7 @@ export default defineConfig([
     files: [
       'src/modules/home/**/*.{js,jsx}',
       'src/modules/settings/**/*.{js,jsx}',
+      'src/modules/obsidian/**/*.{js,jsx}',
       'src/modules/kb/**/*.{js,jsx}',
       'src/modules/crawl/**/*.{js,jsx}',
     ],
@@ -84,6 +85,8 @@ export default defineConfig([
                 '../home/**',
                 '../settings/*',
                 '../settings/**',
+                '../obsidian/*',
+                '../obsidian/**',
                 '../kb/*',
                 '../kb/**',
                 '../crawl/*',

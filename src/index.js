@@ -6,6 +6,9 @@ export * as errors from './core/errors/index.js';
 export * as home from './modules/home/service.js';
 export * as kb from './modules/kb/service.js';
 export * as crawl from './modules/crawl/service.js';
+// obsidian 域的 service 也对外导出：spec() 是一份给外部 agent 消费的解析契约
+// （「内容规范文档在哪」），同 kb.status 性质，不是纯用户偏好。
+export * as obsidian from './modules/obsidian/service.js';
 
 // core/web.js 的纯函数（HTML→markdown、sitemap 解析、URL 归一）也对外导出：
 // 库用方想复用「抓一个页面并清洗」时不必自己重写一遍。

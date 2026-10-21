@@ -15,6 +15,29 @@ description: Obsidian vault 中存在未解析的 `[[]]` 双链，需要补全�
 
 ---
 
+## 步骤 0：解析规范文档与 vault（先于一切步骤）
+
+本 skill **不自带**内容生成规范——四种内容模式与问卷模式规范由用户维护在 vault 里（默认 `<vault>/nx-kn/`），**用户随时可以改**。所以动手前先解析它们在哪：
+
+```bash
+nx-kn obsidian spec --json
+```
+
+从返回里取三样东西：
+
+- `docs[]` 里 `key` = `content` 的 `path` → `{content_spec}`（内容生成规范）
+- `docs[]` 里 `key` = `questionnaire` 的 `path` → `{questionnaire_spec}`（问卷模式规范）
+- `vault` → `{vault_root}`（vault 根目录）
+
+**兜底**（`nx-kn obsidian spec` 命令不存在、或返回 `configured:false` 时）：
+
+1. 环境变量 `NX_OBSIDIAN_VAULT=<绝对路径>`；
+2. 否则从 `{file}` 沿父目录走到第一个含 `.obsidian` 的目录 = `{vault_root}`，规范默认在 `<{vault_root}>/nx-kn/base-content.md` 与 `<{vault_root}>/nx-kn/questionnaire.md`。
+
+> ⚠️ 两份规范文件任一缺失，就**停下来问用户**——不要凭记忆编规范内容。
+
+---
+
 ## 流程（9 步）
 
 ```
@@ -22,7 +45,7 @@ description: Obsidian vault 中存在未解析的 `[[]]` 双链，需要补全�
                                                           ↓
                                    5. 修文件名（sanitization）──┐
                                                               ↓
-                                6. 生成内容（按 references/10）──┤
+                                6. 生成内容（按内容规范文档）──┤
                                                               ↓
                             7. 创建到 source 同目录 ────────────┘
                                                               ↓
@@ -39,7 +62,7 @@ description: Obsidian vault 中存在未解析的 `[[]]` 双链，需要补全�
 # 推荐：obsidian CLI（权威解析器，覆盖中文括号 / 全角空格 / NBSP）
 obsidian unresolved format=json
 # 兜底：本 skill 自带 scripts/scan_unresolved.py（无需 obsidian CLI）
-python scripts/scan_unresolved.py
+python scripts/scan_unresolved.py --vault {vault_root}
 ```
 
 **输出形态**（与 obsidian CLI 一致）：
@@ -70,7 +93,7 @@ grep -rn "\[\[xxx\]\]" --include="*.md" 日常/  # 排除 ctl/、.claude/、.zve
 
 ```bash
 python scripts/gen_frontmatter.py \
-    --source 日常/foo.md --link "xxx" [--locate]
+    --source 日常/foo.md --link "xxx" [--locate] --vault {vault_root}
 ```
 
 脚本输出的 YAML 段（`---` 到下一个 `---` 之间）就是新文件的 frontmatter，**直接复制到 Write content 的开头**。
@@ -88,7 +111,7 @@ python scripts/gen_frontmatter.py \
 
 ### 6. 生成内容
 
-按 `references/10-content-patterns.md` 的规范。读 `{file}` 上下文后生成**深入、不重复**的笔记。
+按内容规范文档（`{content_spec}`，解析见步骤 0）的规范。读 `{file}` 上下文后生成**深入、不重复**的笔记。
 
 **主题 → 模式** 的映射：
 
@@ -98,7 +121,7 @@ python scripts/gen_frontmatter.py \
 | 动词 / 操作 | 模式 B 实践拆解 / 模式 C 还原论拆解 |
 | 问句 / 批注 / 反馈 | 模式 B 实践拆解（整篇写一篇针对性回答） |
 
-锚点前置、量级感知、trade-off 讨论——见 references/10。
+锚点前置、量级感知、trade-off 讨论——见内容规范文档（`{content_spec}`）。
 
 **生成前先在 vault 内搜相关笔记避免重复**：用 `mcp__zvec_grep__zvec_grep_search`（`query` = `{link}` 字面 + 源上下文一句话摘要，`limit` = 10）；MCP 不可用时回退 Grep，关键词从 `{link}` 字面和源上下文提炼 2-4 个组合 OR 检索。
 
@@ -121,12 +144,13 @@ python scripts/gen_frontmatter.py \
 
 ```bash
 # 写笔记前：snapshot 当前 vault 的 unresolved 状态
-python scripts/postcheck.py --snapshot snapshot.json
+python scripts/postcheck.py --snapshot snapshot.json --vault {vault_root}
 # ... 写新笔记（步骤 6+7） ...
 # 写完后：diff snapshot，识别新文件引入的失败双链
 python scripts/postcheck.py \
     --snapshot-before snapshot.json \
-    --new-file "日常/动画工程师需要养成哪些直觉.md"
+    --new-file "日常/动画工程师需要养成哪些直觉.md" \
+    --vault {vault_root}
 # 退出码 0 = 通过；1 = 失败（stderr 打印明细 + 6 条根因诊断）
 ```
 
@@ -253,11 +277,15 @@ Write(file_path, content)
 派发前，主线程执行：
 
 ```bash
+# 解析 {content_spec} / {questionnaire_spec} / {vault_root}（步骤 0）
+nx-kn obsidian spec --json
+# 取 docs[] 里 content / questionnaire 两项的 path，以及 vault 字段
+
 python scripts/gen_frontmatter.py \
-  --source {file} --link "{link}" --locate
+  --source {file} --link "{link}" --locate --vault {vault_root}
 # 把输出里 --- 到 --- 之间的内容抓出来，替换 {frontmatter_yaml}
 
-# 计算 {vault_root}: 从 {file} 沿父目录走到第一个含 .obsidian 的目录
+# 兜底（spec 不可用时）：从 {file} 沿父目录走到第一个含 .obsidian 的目录
 # 例：{file} = "日常/foo.md" → vault_root = "D:\code\a_md\obsidian_init"
 #     注入到 subagent prompt 的 {vault_root} 占位符（zvec_grep_search 的 root 参数需要绝对路径）
 ```
@@ -273,7 +301,8 @@ python scripts/gen_frontmatter.py \
 
 1. 源文件 {file} 第 {line} 行引用了 [[{link}]]
 2. 读源文件上下文，理解链接含义
-3. 按 references/10-content-patterns.md 的规范生成内容
+3. 按 {content_spec}（内容规范文档的绝对路径，主线程已解析）的规范生成内容
+   - 若 {content_spec} 仍是占位符：先跑 `nx-kn obsidian spec --json` 自行解析；再失败则从 {file} 沿父目录找 `.obsidian`，默认取 `<vault>/nx-kn/base-content.md`
    - 根据主题选择对应模式：概念深潜 / 实践拆解 / 还原论拆解 / 概念拓扑
    - 锚点前置：第一段先给具体问题或反直觉现象
    - 量级感知：用具体数字，不用"快"、"慢"、"大量"
@@ -303,7 +332,7 @@ python scripts/gen_frontmatter.py \
 
 1. 读取源文件，解析用户的所有问卷回答
 2. 分析关键数据：约束条件、偏好 / 厌恶、限制因素、基线能力
-3. 读取 `references/20-questionnaire.md` 获取问卷模式的写作规范
+3. 读取问卷规范文档（`{questionnaire_spec}`，解析方式见步骤 0）获取问卷模式的写作规范
 4. 生成与用户情况匹配的针对性响应
 5. 写入位置：
    - 如果触发双链是"响应锚点"（如 `[[xxx规划]]`）→ 直接写入该文件（文件在 source 同目录）
@@ -438,11 +467,11 @@ nx-kn skill groups
 
 | 脚本 | 用法 | 何时用 |
 | --- | --- | --- |
-| `scripts/gen_frontmatter.py` | `python scripts/gen_frontmatter.py --source <file> --link "<text>" [--locate]` | 步骤 4，自动生成合规 YAML |
-| `scripts/scan_unresolved.py` | `python scripts/scan_unresolved.py` | 步骤 1 / 9 入口；obsidian CLI 不在 PATH 时回退 |
-| `scripts/postcheck.py` | `python scripts/postcheck.py --snapshot <out>` / `--snapshot-before <json> --new-file <path>` | 步骤 8，校验新文件内部双链 |
+| `scripts/gen_frontmatter.py` | `python scripts/gen_frontmatter.py --source <file> --link "<text>" [--locate] [--vault <绝对路径>]` | 步骤 4，自动生成合规 YAML |
+| `scripts/scan_unresolved.py` | `python scripts/scan_unresolved.py [--vault <绝对路径>]` | 步骤 1 / 9 入口；obsidian CLI 不在 PATH 时回退 |
+| `scripts/postcheck.py` | `python scripts/postcheck.py --snapshot <out>` / `--snapshot-before <json> --new-file <path>`（均可加 `--vault <绝对路径>`） | 步骤 8，校验新文件内部双链 |
 
-vault 根的解析：**`cd` 到 vault 目录再跑脚本**（脚本沿父目录找 `.obsidian`）；不确定时加 `--vault <绝对路径>` 或环境变量 `NX_OBSIDIAN_VAULT=<绝对路径>`。
+vault 根的解析：**`cd` 到 vault 目录再跑脚本**（脚本沿父目录找 `.obsidian`）；不确定时加 `--vault <绝对路径>` 或环境变量 `NX_OBSIDIAN_VAULT=<绝对路径>`。也可以先跑 `nx-kn obsidian spec --json`，一次拿到 vault 根与两份规范文档的绝对路径。
 
 ---
 
@@ -486,8 +515,8 @@ vault 根的解析：**`cd` 到 vault 目录再跑脚本**（脚本沿父目录�
 | 文件                                          | 用途                                                                                            |
 | --------------------------------------------- | ----------------------------------------------------------------------------------------------- |
 | `references/00-frontmatter-spec.md`         | 步骤 4 工具说明 + frontmatter 完整规范                                                          |
-| `references/10-content-patterns.md`         | 步骤 6 规范：四种模式（概念深潜 / 实践拆解 / 还原论拆解 / 概念拓扑）+ 好坏例子                    |
-| `references/20-questionnaire.md`            | 问卷模式：针对性响应生成规范                                                                    |
+| `<vault>/nx-kn/base-content.md`（`{content_spec}`） | 步骤 6 规范：四种模式（概念深潜 / 实践拆解 / 还原论拆解 / 概念拓扑）+ 好坏例子——**在 vault 里，用户可随时改**（位置由步骤 0 解析） |
+| `<vault>/nx-kn/questionnaire.md`（`{questionnaire_spec}`） | 问卷模式：针对性响应生成规范——同上，在 vault 里                              |
 | `scripts/gen_frontmatter.py`                | 步骤 4：自动生成 frontmatter                                                                    |
 | `scripts/scan_unresolved.py`                | 全 vault 扫描未解析链接（步骤 1 入口，obsidian CLI 不在 PATH 时回退）                          |
 | `scripts/postcheck.py`                      | **步骤 8**：新文件写完后做"新文件内部双链引用校验"（基于 obsidian CLI diff，不用正则） |

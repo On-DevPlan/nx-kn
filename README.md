@@ -105,6 +105,7 @@ src/
 ├─ modules/   功能域，各含 index.js（action 声明）+ service.js（业务）+ view.jsx（面板）
 │   ├─ home/       示例域（读路径）
 │   ├─ settings/   示例域（写路径：面板表单 → POST → mutateStore → CLI 同源可读）
+│   ├─ obsidian/   Obsidian 域：vault 定位 + 内容规范文档路径解析（spec 是 repair skill 的消费契约）
 │   ├─ kb/         知识库域：kb add / kb remove / kb list + index / query / status + watch（守护）
 │   ├─ crawl/      资料采集域：crawl add / run / list / remove（抓文档站 → markdown → 当知识库）
 ├─ runtime/   装配：registry（action 汇合）/ cli / api / server / spec

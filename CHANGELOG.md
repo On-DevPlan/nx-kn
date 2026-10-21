@@ -4,6 +4,56 @@
 
 ## [Unreleased]
 
+### Added — `obsidian` 域：vault 定位与内容规范文档的可配置解耦
+
+新增独立功能域 `obsidian`，专门回答一句话：**「内容规范文档在哪」**。
+
+```
+nx-kn obsidian get                  # 读配置与解析后的路径（vault 来源 / 规范目录 / 文档存在性）
+nx-kn obsidian set k=v...           # 写配置：vault=<绝对路径> / specDir=<vault内相对路径>
+                                     #          contentDoc= / questionnaireDoc=（空值=复位）
+nx-kn obsidian spec                 # 解析两份规范文档的绝对路径——skill 消费契约
+```
+
+配置落在 `store.json` 顶层 `obsidian{}`：`vault` / `specDir`（默认 `nx-kn`）/
+`contentDoc`（默认 `base-content.md`）/ `questionnaireDoc`（默认 `questionnaire.md`）。
+vault 解析链：`store.obsidian.vault` > 环境变量 `NX_OBSIDIAN_VAULT` > 第一个含 `.obsidian/`
+的 `kb.vaults[]` 登记库 > 未设置。**兜底只在「未设置」时发生**——设了却指错地方会如实报
+「目录不存在」，不会悄悄换成另一个库（那会把配置错误藏进每一篇按错规范写出的笔记里）。
+未配置是**业务结果**不是错误：`get` / `spec` 返回 `configured:false` + 可照做的提示，只有
+`set` 会因参数非法 / 目录不存在而报错（400 / 404）。
+
+面板新增「Obsidian」tab：表单 + 「解析结果」卡片（vault 来源、`.obsidian` 标记、规范目录、
+两份文档的存在性）。
+
+### Changed — `kn-obsidian-repair-unresolved-links` 不再内置内容规范
+
+「四种内容模式」与「问卷模式」两份规范原先打包在 skill 的 `references/10-content-patterns.md`
+与 `references/20-questionnaire.md` 里，用户要改规范只能改 skill 源码再重装。现已改为
+**从 vault 现读**：
+
+- skill 新增「步骤 0：解析规范文档与 vault」，用 `nx-kn obsidian spec --json` 拿到
+  `{content_spec}` / `{questionnaire_spec}` / `{vault_root}`；命令不存在或返回
+  `configured:false` 时按 `NX_OBSIDIAN_VAULT` → 沿父目录找 `.obsidian` → `<vault>/nx-kn/`
+  的目录约定兜底。**两份文档任一缺失就停下来问用户**，不许凭记忆编规范。
+- 两个 1 字节的 reference 文件已删除（内容早已迁进 vault，留着只是悬空指针）；
+  `references/00-frontmatter-spec.md` 保留（它讲的是 `gen_frontmatter.py` 的机制，不是内容风格）。
+- 并发模式下由主线程解析后注入 subagent prompt（与既有的 `{frontmatter_yaml}` 注入同构），
+  模板内另留一行自解析兜底。
+- skill 自带的三个 python 脚本统一带 `--vault {vault_root}`，让脚本侧与 nx-kn 的解析结果同源。
+
+**为什么这么改**：内容规范是**用户的写作偏好**，会频繁迭代；skill 是**工具**，不该背着
+用户的内容要求一起发版。解耦之后，改规范 = 改 vault 里的一份 markdown，skill 不用重装。
+
+### Fixed — POST 的坏 JSON body 不再被静默当成「空参数 + 成功」
+
+`src/runtime/api.js` 原来把请求体解析失败一律降级成空对象（`.catch(() => ({}))`）。
+后果是：请求体被截断或转义坏了时，action 收到空参数、返回 `skipped`、HTTP 200，
+界面上照样弹「已保存」——**实际什么都没写**。这类「静默失效」比直接报错难查得多。
+
+现在区分两件事：**空 body** 合法（很多 POST 本就不带参数，仍是 200 + skipped）；
+**坏 body** 返回 400 `INVALID_INPUT`（`请求体不是合法 JSON: …`）。
+
 ### Removed — `needdo` 模块已整体迁出 nx-kn，沉淀为 nx-sk 的 skill
 
 混乱输入收件箱（NeedDo）不再在 nx-kn 维护：

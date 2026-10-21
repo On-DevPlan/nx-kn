@@ -38,7 +38,16 @@ test('routes: 命令表含各域命令且带 HTTP 对照', async () => {
   const r = JSON.parse(stdout);
   assert.ok(r.count >= 8, `至少 8 条命令，实际 ${r.count}`);
   const ids = r.routes.map((x) => x.id);
-  for (const id of ['home.bootstrap', 'settings.get', 'settings.set', 'kb.status', 'kb.query']) {
+  for (const id of [
+    'home.bootstrap',
+    'settings.get',
+    'settings.set',
+    'obsidian.get',
+    'obsidian.set',
+    'obsidian.spec',
+    'kb.status',
+    'kb.query',
+  ]) {
     assert.ok(ids.includes(id), `缺命令 ${id}`);
   }
 });
@@ -236,5 +245,114 @@ test('runZg：带空格的路径不被 cmd 切分（Windows 引号回归）', as
   assert.doesNotMatch(text, /at most one root path/, '路径被切成了多个 root');
   assert.equal(r.ok, true, `zg status 应成功，实际：${text}`);
   assert.ok(text.includes(basename(dir)), '回显的根路径应与传入的一致');
+});
+
+// ---- obsidian 域：vault 定位与内容规范文档解析 ----
+//
+// 这个域的唯一职责是回答一句话：「内容规范文档在哪」。
+// 答错了不会报错，只会**按另一套规范写笔记**——所以每条路径都要在真实进程里钉住。
+
+// 一个「像样的 vault」：有 .obsidian/，有 nx-kn/ 规范目录与两份规范文档。
+function fakeVault(withDocs = true) {
+  const dir = mkdtempSync(join(tmpdir(), 'nx-kn-vault-'));
+  mkdirSync(join(dir, '.obsidian'));
+  mkdirSync(join(dir, 'nx-kn'));
+  if (withDocs) {
+    writeFileSync(join(dir, 'nx-kn', 'base-content.md'), '# 内容生成规范\n', 'utf8');
+    writeFileSync(join(dir, 'nx-kn', 'questionnaire.md'), '# 问卷模式 · 内容规范\n', 'utf8');
+  }
+  return dir;
+}
+
+test('obsidian get：未配置时给出引导而不是报错（业务结果，不是失败）', async () => {
+  const { env } = isolatedEnv();
+  const { stdout } = await run('obsidian get --json', { ...env, NX_OBSIDIAN_VAULT: '' });
+  const r = JSON.parse(stdout);
+  assert.equal(r.status, 'ok');
+  assert.equal(r.configured, false);
+  assert.match(r.hints.join('\n'), /obsidian set/);
+});
+
+test('obsidian set → get：vault 与规范目录写读闭环走真实存储', async () => {
+  const { env } = isolatedEnv();
+  const vault = fakeVault();
+  await run('obsidian set vault=' + vault + ' specDir=nx-kn', env);
+
+  const r = JSON.parse((await run('obsidian get --json', env)).stdout);
+  assert.equal(r.configured, true);
+  assert.equal(r.source, 'store');
+  assert.equal(r.vault, vault);
+  assert.equal(r.specDir, join(vault, 'nx-kn'));
+  assert.equal(r.hasObsidianMarker, true);
+  assert.ok(r.docs.every((d) => d.exists === true), '两份规范文档都应存在');
+});
+
+test('obsidian spec：给出 skill 要读的两份文档的绝对路径', async () => {
+  const { env } = isolatedEnv();
+  const vault = fakeVault();
+  await run('obsidian set vault=' + vault, env);
+
+  const r = JSON.parse((await run('obsidian spec --json', env)).stdout);
+  assert.equal(r.configured, true);
+  assert.deepEqual(r.docs.map((d) => d.key), ['content', 'questionnaire']);
+  assert.equal(r.docs[0].path, join(vault, 'nx-kn', 'base-content.md'));
+  assert.equal(r.docs[1].path, join(vault, 'nx-kn', 'questionnaire.md'));
+  assert.ok(r.docs.every((d) => d.exists === true));
+});
+
+test('obsidian spec：环境变量兜底（skill 的 python 脚本认同一个变量）', async () => {
+  const { env } = isolatedEnv();
+  const vault = fakeVault();
+  const r = JSON.parse((await run('obsidian spec --json', { ...env, NX_OBSIDIAN_VAULT: vault })).stdout);
+  assert.equal(r.configured, true);
+  assert.equal(r.source, 'env');
+  assert.equal(r.docs[0].exists, true);
+});
+
+test('obsidian spec：kb 登记库兜底（第一个含 .obsidian 的登记库）', async () => {
+  const { env } = isolatedEnv();
+  const vault = fakeVault();
+  await run('kb add --json ' + vault, env);
+  const r = JSON.parse((await run('obsidian spec --json', { ...env, NX_OBSIDIAN_VAULT: '' })).stdout);
+  assert.equal(r.source, 'kb');
+  assert.equal(r.docs[0].exists, true);
+});
+
+test('obsidian spec：规范文档缺失时如实报缺失并指名配置键', async () => {
+  const { env } = isolatedEnv();
+  const vault = fakeVault(false);
+  await run('obsidian set vault=' + vault, env);
+
+  const r = JSON.parse((await run('obsidian spec --json', env)).stdout);
+  assert.equal(r.configured, true);
+  assert.ok(r.docs.every((d) => d.exists === false));
+  assert.match(r.hints.join('\n'), /contentDoc/);
+});
+
+test('obsidian set：白名单外的键被拒绝；specDir 必须是 vault 内相对路径', async () => {
+  const { env } = isolatedEnv();
+  await assert.rejects(
+    () => run('obsidian set hacker=yes', env),
+    (err) => {
+      assert.match(err.stderr, /未知的 obsidian 配置键/);
+      return true;
+    }
+  );
+  await assert.rejects(
+    () => run('obsidian set specDir=C:\\elsewhere', env),
+    (err) => {
+      assert.match(err.stderr, /必须是相对路径/);
+      return true;
+    }
+  );
+});
+
+test('obsidian get：人类可读输出（skill 与人都在用这条命令）', async () => {
+  const { env } = isolatedEnv();
+  const vault = fakeVault();
+  await run('obsidian set vault=' + vault, env);
+  const { stdout } = await run('obsidian get', env);
+  assert.match(stdout, /【存在】/);
+  assert.match(stdout, /base-content\.md/);
 });
 
