@@ -31,9 +31,8 @@ export default function App() {
   // 下面这个（[] 只跑一次）负责「深链优先」，紧接着那个（[ui.view]）负责「回写」。
   // 历史 bug：两者在首帧同时开火——回写那个拿的是**尚未被深链改写**的 ui.view，
   // 于是 `location.hash = '#/' + 旧view` 把刚打开的深链覆盖掉，还顺带触发
-  // hashchange 把 view 又改回去。症状是「深链永远失效」+「地址栏闪一下首页」
-  // （NeedDo 的走查里复现过：带持久化 view 时开 #/kb 最终停在旧 tab；
-  //  即便清空 localStorage，#/kb 也会被拽回 #/home）。
+  // hashchange 把 view 又改回去。症状是「深链永远失效」+「地址栏闪一下首页」——
+  // 即便清空 localStorage，#/kb 也会被拽回 #/home。
   // 修法：回写那个 effect 在**第一次运行时只认领、不写**，把首帧让给深链。
   const hydrating = useRef(true);
   useEffect(() => {

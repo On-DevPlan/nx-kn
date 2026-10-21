@@ -30,25 +30,9 @@ Python 3.10+ 或 uv；抓取/分类能力更强，可选 LLM 增强——没装�
 索引也可以**自动跟上**：`nx-kn watch` 常驻监听各库，笔记一变就自动跑增量索引；
 `nx-kn serve` 起的面板里**默认已开**这道守护，面板上能看最近刷新、随手开关。
 
-散落的东西另有一个去处：**NeedDo 收件箱**（`needdo` 域，面板上是第 4 个 tab）。
-随手丢进来的杂乱文字 / 公告 / 网址 / PDF·DOCX 都收进来，落盘到数据目录
-（`~/.nx-kn/needdo/`，原文件与提取文本都在），按确定性规则归类
-（待办 / 公告 / 文档 / 链接 / 杂项）并写 markdown 报告。**文档解析零依赖**
-（DOCX 走自带 zip + zlib，PDF 抓 Flate 流里的文本算子；提取不出就保留原件照常入库）。
+散落的东西另有去处：**nx-sk 的 sk-needdo skill**——把混乱输入丢给 agent，它会发现或建立一个匹配的栏目、自动设计字段字典、把每条填进对应条目；md 字段里的 `- [ ]` 任务清单在面板里点击即勾选、写回。安装：`nx-sk skill install sk-needdo`。
 
-需要 AI 参与时它给的是**建议**、不是结论：`process --enhance-level` 把条目排进队列 →
-`brief` 导出一份自足简报交给 agent → `apply` 写回建议（只追加 `ai` 附注，绝不覆盖原文与主题）
-→ `review` 由人接受或拒绝，**接受才生效**并留下来源痕迹（`topicSource: 'ai'`）。
-
-| | |
-| --- | --- |
-| CLI 命令表 | `nx-kn help`（或 `routes` 看命令 ↔ 路由对照） |
-| Web 面板 | `pnpm start` 后打开 `http://127.0.0.1:7881` |
-| 数据 | `~/.nx-kn/store.json` + `~/.nx-kn/sources/`（采集产物）+ `~/.nx-kn/needdo/`（收件箱原件与提取文本）；原子写，`NX_KN_STORE` 覆盖时三者一起搬 |
-| 索引 | 每个库各自的 `<vault>/.zvec-grep/`（由 zg 拥有） |
-| 自检 | `nx-kn health` |
-
-### 上手
+## 上手
 
 ```bash
 npm install -g @zvec/zvec-grep        # 召回引擎（需 Node ≥ 22）
@@ -111,35 +95,7 @@ agent 拿到后可以拼出绝对路径去读全文。`--json` 给结构化 `hit
 `index` 不带 `--rebuild` 就是**增量**（zg 默认行为：只嵌入新增/改动的文件）；
 只有换 embedding 模型才需要 `--rebuild`。面板上也分成「更新索引」与「重建索引」两个按钮。
 
-「回头再说」的东西丢进收件箱：
-
-```bash
-nx-kn needdo add "明天下午3点开会 记得带Q4预算"        # 文字（首行当标题）
-nx-kn needdo add --link https://example.com/weekly     # 网址（整行 URL 自动识别为链接）
-nx-kn needdo add --file ./Q4排期.docx                   # 文档：pdf/docx/txt/md，落盘 + 尽力提取文本
-nx-kn needdo list                                      # 看收件箱（--status inbox|done、--topic 过滤）
-nx-kn needdo list "报销"                                # 一个词就是全文入口（标题/正文/主题/链接）
-nx-kn needdo process                                   # 按主题整理归档 + 写 markdown 报告
-nx-kn needdo show <id>                                 # 某条的全文（文档给提取文本）
-nx-kn needdo edit <id> --topic 待办事项                  # 改主题：记成「你定的」，规则与 AI 都不再覆盖
-nx-kn needdo remove <id>                               # 删除 = 进回收站（30 天内可恢复）
-nx-kn needdo trash --ids <id> --restore                # 反悔了：恢复回来（--empty 才真删）
-nx-kn needdo export                                    # 沉淀：导出成 markdown 目录 + 登记为知识库
-nx-kn index                                            # 产物已登记，建索引后即可 query 检索
-```
-
-要让 agent 参与复核（可选，默认**不调 AI**）：
-
-```bash
-nx-kn needdo process --enhance-level 2 --agent claude  # 规则照跑，同时排进 AI 队列
-nx-kn needdo brief --level 2 --json > brief.json       # 导出自足简报，交给 agent
-nx-kn needdo apply --plan plan.json                    # 写回建议（落进 ai 附注，待复核）
-nx-kn needdo review --ids nd_x,nd_y                    # 接受建议（--reject 拒绝）
-```
-
-> **AI 改不了确定性字段**。规则表产出的 `topic` 永远可解释、可回归测试；AI 的结论先落成
-> `suggested`，人接受后才写进 `topic` 并记 `topicSource: 'ai'`。简报里的 `rev` 是内容指纹——
-> agent 加工期间条目被改过，`apply` 就把它归入 `stale` 跳过（不报错、不硬写）。
+把混乱输入丢给 sk-needdo 即可（见上）。
 
 ## 结构
 
@@ -151,7 +107,6 @@ src/
 │   ├─ settings/   示例域（写路径：面板表单 → POST → mutateStore → CLI 同源可读）
 │   ├─ kb/         知识库域：kb add / kb remove / kb list + index / query / status + watch（守护）
 │   ├─ crawl/      资料采集域：crawl add / run / list / remove（抓文档站 → markdown → 当知识库）
-│   └─ needdo/     收件箱域：needdo add / list / show / process / brief / apply / review（混乱输入 → 主题整理 + AI 建议）
 ├─ runtime/   装配：registry（action 汇合）/ cli / api / server / spec
 └─ web/       React 面板壳（vite 构建，产物被零依赖 node:http 服务）
 docs/

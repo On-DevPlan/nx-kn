@@ -12,7 +12,6 @@
     "toast",
     "snippet-box",
     "cli-hint",
-    "dlg",
-    "needdo"
+    "dlg"
   ]
 }

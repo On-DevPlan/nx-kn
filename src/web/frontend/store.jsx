@@ -12,8 +12,6 @@ const LS_KEY = 'nx-kn-ui';
 // 新增视图后在这里加一条默认值（view 的默认值是首个视图 id）。
 const DEFAULT_UI = {
   view: 'home',
-  // NeedDo 的过滤与检索词（面板级选择，刷新不该丢）
-  needdo: { filter: 'inbox', q: '' },
 };
 
 function loadUi() {

@@ -13,7 +13,6 @@ import {
   APP_NAME,
   CRAWL_ENGINES,
   DEFAULT_CRAWL_ENGINE,
-  NEEDDO_FILE_EXTS,
   sourceDirOf,
   storePathFromEnv,
 } from './paths.js';
@@ -37,11 +36,6 @@ export function initialState() {
     // 每页的 url→{file,hash} 映射写在源目录内的 .nx-kn-crawl.json，
     // 不塞进 store（几百页的映射会让这个文件变得又大又吵）。
     crawl: { sources: [] },
-    // NeedDo 收件箱域（modules/needdo）：随手丢进来的文字/链接/文档条目。
-    // 条目元数据在这里，原件与提取文本落 needdoDir() 下的文件——与 crawl 的
-    // 「索引进 store、内容进文件」同一个分工。逐条校验见 normalizeNeeddo。
-    // trash 是回收站：删除先进这里（软删除），--empty 或超期才真删。
-    needdo: { items: [], trash: [] },
   };
 }
 
@@ -175,7 +169,7 @@ export function normalize(data) {
 
   // 其余顶层键：base 里声明过的按 base 的形状兜底，没声明过的原样带过来
   for (const [k, v] of Object.entries(data)) {
-    if (k === 'version' || k === 'settings' || k === 'kb' || k === 'crawl' || k === 'needdo') continue;
+    if (k === 'version' || k === 'settings' || k === 'kb' || k === 'crawl') continue;
     if (Array.isArray(v)) {
       base[k] = v;
     } else if (v && typeof v === 'object') {
@@ -190,7 +184,6 @@ export function normalize(data) {
   // `vaults` 则永远拿不到值。所以迁移必须在这里做完。
   base.kb = normalizeKb(data.kb);
   base.crawl = normalizeCrawl(data.crawl);
-  base.needdo = normalizeNeeddo(data.needdo);
   return base;
 }
 
@@ -310,114 +303,6 @@ export function normalizeCrawl(raw) {
       if (!rec || seen.has(rec.name)) continue; // 按 name 去重（name 就是目录名）
       seen.add(rec.name);
       out.sources.push(rec);
-    }
-  }
-  return out;
-}
-
-// ---- NeedDo 收件箱域的结构化归一化 ----
-//
-// 一条收件箱条目。kind 三态：text（粘贴的文字）/ link（URL）/ file（上传的原件）。
-// file 条目的 content 只存摘录（提取文本的前几百字），全文在 needdoDir() 下的文件里——
-// store.json 是「条目清单」，不是文档仓库，塞全文会让每次读-改-写都搬运几 MB。
-//
-// topicSource 与 ai 是 round3（agent 交接协议）加的：
-//   topicSource  'rule'（规则表定的）| 'ai'（AI 建议被接受后生效）| 'user' | null
-//                —— kb 的 origin: 'user' | 'crawl' 的直系同类，人显式定的永不被 AI 覆盖
-//   ai           AI 的**附注**（可空）：建议主题/摘要/标签/置信度 + 状态机
-//                pending → suggested → accepted | rejected。
-//                它绝不覆盖确定性字段（content/title/excerpt/topic/status 一个都不动）。
-function normalizeNeeddoItem(it) {
-  if (!it || typeof it !== 'object') return null;
-  const id = it.id ? String(it.id) : null;
-  if (!id) return null; // 无 id 的条目无法被 remove / open 定位，直接丢弃
-  const kind = ['text', 'link', 'file'].includes(it.kind) ? it.kind : 'text';
-  const ext = NEEDDO_FILE_EXTS.includes(it.ext) ? it.ext : null;
-  if (kind === 'file' && !ext) return null; // file 条目没有合法扩展名 = 无法解析，丢弃
-  // size 的空值陷阱：Number(null) 与 Number('') 都是 0，不是 NaN——
-  // 「没记录体积」会被归一化成「0 字节」。空值显式拦下，只认真正的数字。
-  const size = it.size === null || it.size === undefined || it.size === '' ? NaN : Number(it.size);
-  return {
-    id,
-    kind,
-    title: it.title ? String(it.title) : '',
-    content: typeof it.content === 'string' ? it.content : '',
-    excerpt: typeof it.excerpt === 'string' ? it.excerpt : '',
-    // 文字条目里可能夹着链接（「看一下这个 https://… 再决定」）——原文保持不动，
-    // 抽出来的 URL 附在这里，详情视图给可点、整理报告里单列。空数组 = 没夹链接。
-    links: Array.isArray(it.links) ? it.links.filter((x) => typeof x === 'string' && x) : [],
-    file: it.file ? String(it.file) : null,
-    textFile: it.textFile ? String(it.textFile) : null,
-    ext,
-    size: Number.isFinite(size) ? size : null,
-    topic: typeof it.topic === 'string' && it.topic ? it.topic : null,
-    topicSource: ['rule', 'ai', 'user'].includes(it.topicSource) ? it.topicSource : null,
-    ai: normalizeNeeddoAi(it.ai),
-    status: it.status === 'done' ? 'done' : 'inbox',
-    agent: it.agent ? String(it.agent) : null,
-    addedAt: it.addedAt ? String(it.addedAt) : null,
-    // editedAt 必须在白名单里：归一化是逐字段重建的，漏掉就等于「编辑痕迹被静默抹掉」
-    // （条目标题看着没变，但「这条改过」这件事丢了）。
-    editedAt: it.editedAt ? String(it.editedAt) : null,
-    processedAt: it.processedAt ? String(it.processedAt) : null,
-    // 只有回收站里的条目有值；在册条目恒为 null（删除时写上，恢复时清掉）。
-    deletedAt: it.deletedAt ? String(it.deletedAt) : null,
-    // 沉淀（导出到知识库）的三个字段。必须在白名单里——归一化是逐字段重建的，
-    // 漏一个就等于「导出记录被静默抹掉」，下次 export 会当成没导过、重复导一遍。
-    exportedAt: it.exportedAt ? String(it.exportedAt) : null,
-    exportPath: it.exportPath ? String(it.exportPath) : null,
-    exportRev: it.exportRev ? String(it.exportRev) : null,
-  };
-}
-
-// AI 附注（round3）。status 四态：pending（排队待复核）→ suggested（agent 已给建议，
-// 等人/面板接受）→ accepted | rejected。level 照 crawl 的 0-3（0 = 没调 LLM，
-// 也不该有附注——但真出现了就照实留着，归一化的职责是校验不是抹除）。
-function normalizeNeeddoAi(ai) {
-  if (!ai || typeof ai !== 'object') return null;
-  const status = ['pending', 'suggested', 'accepted', 'rejected'].includes(ai.status) ? ai.status : null;
-  if (!status) return null;
-  const level = Number(ai.level);
-  // confidence 与 size 同一个坑：Number(null) === 0 会把「没给置信度」变成「置信 0」，
-  // 而 0 在面板上是个有意义的读数（看起来像 AI 很不确定）。空值显式拦下。
-  const conf =
-    ai.confidence === null || ai.confidence === undefined || ai.confidence === ''
-      ? NaN
-      : Number(ai.confidence);
-  return {
-    status,
-    level: Number.isInteger(level) && level >= 0 && level <= 3 ? level : 0,
-    agent: ai.agent ? String(ai.agent) : null,
-    at: ai.at ? String(ai.at) : null,
-    rev: ai.rev ? String(ai.rev) : null,
-    batchId: ai.batchId ? String(ai.batchId) : null,
-    topic: typeof ai.topic === 'string' && ai.topic ? ai.topic : null,
-    summary: typeof ai.summary === 'string' && ai.summary ? ai.summary : '',
-    tags: Array.isArray(ai.tags) ? ai.tags.filter((x) => typeof x === 'string' && x) : [],
-    confidence: Number.isFinite(conf) ? conf : null,
-  };
-}
-
-export function normalizeNeeddo(raw) {
-  const src = raw && typeof raw === 'object' ? raw : {};
-  const out = { items: [], trash: [] };
-  const seen = new Set();
-  if (Array.isArray(src.items)) {
-    for (const it of src.items) {
-      const rec = normalizeNeeddoItem(it);
-      if (!rec || seen.has(rec.id)) continue; // 按 id 去重
-      seen.add(rec.id);
-      out.items.push(rec);
-    }
-  }
-  // 回收站与在册条目同一套逐字段校验（同一形状），只是多一个 deletedAt；
-  // id 去重跨两个列表一起算——同一条不该同时躺在两处。
-  if (Array.isArray(src.trash)) {
-    for (const it of src.trash) {
-      const rec = normalizeNeeddoItem(it);
-      if (!rec || seen.has(rec.id)) continue;
-      seen.add(rec.id);
-      out.trash.push(rec);
     }
   }
   return out;

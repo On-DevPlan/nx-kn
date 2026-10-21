@@ -4,18 +4,23 @@
 
 ## [Unreleased]
 
-## [0.4.1] - 2026-10-20
+### Removed — `needdo` 模块已整体迁出 nx-kn，沉淀为 nx-sk 的 skill
 
-### Changed
+混乱输入收件箱（NeedDo）不再在 nx-kn 维护：
+- 命令 `needdo add / list / show / edit / process / brief / apply / review / archive / export / trash / remove / file` 全数移除，CLI 与 HTTP 路由同时退场
+- 面板的「NeedDo」tab 已撤，迁移文件 `src/modules/needdo/` 一并删除
+- 落盘的收件箱数据目录 `<store>/needdo/` 不再由本工具创建或读取；如果你之前用过，请当作遗留目录手工归档后删除
+- 收件箱的「主题整理 + AI 简报 → 写回」流程以 **sk-needdo**（nx-sk 的 skill）继续存在：
+  把混乱输入丢给 sk-needdo，agent 会发现或建一个匹配的栏目（section），
+  设计字段字典（field dictionary），把每条填进对应条目，并把任务清单以 `md` 字段的
+  `- [ ]` 语法写进条目正文，**直接在面板里点击勾选并写回**（这是 nx-sk 的 `MdView` 能力，
+  也正是把 needdo 从 nx-kn 迁出的最重要原因）。Skill 安装：`nx-sk skill install sk-needdo`。
 
-- **端口被占用时不再报错退出：自动复用或顺延，并把浏览器指过去**。`serve` 绑定端口
-  遇到 `EADDRINUSE` 时，先探测该端口上的 `/api/bootstrap`：占用者**就是本项目的面板**
-  （`app.name` 相同）就直接复用它——不再起第二个进程——并打开浏览器指向它；占用者是
-  别的服务（或探测不出来）则顺延到**下一个空闲端口**起自己的面板，并打开浏览器指向新
-  面板，不会把浏览器指向别人的服务。
-- **跨项目统一的关闭开关 `NX_SERVE_NO_OPEN`**：设成 `1` / `true` / `yes` / `on` 时
-  `serve` 完全不开浏览器（所有 nx-xx 项目共用这一个变量名）；`--no-open` 仍然只关
-  当前这一次。
+迁移原因：needdo 的价值是「先把东西收进来再整理」，但条目本身没有强 schema——
+而 nx-sk 的栏目 + 字段字典就是为「一个域一种形状」设计的。把它做成 skill 后，AI
+直接产出结构化条目、不再维护一套独立的「条目 / 主题 / AI 附注」数据模型。
+原 needdo 的设计文档、`docs/needdo/research-round*.md`、`docs/needdo/progress.md`
+保留为历史档案，不再更新。
 
 ## [0.4.0] - 2026-10-15
 

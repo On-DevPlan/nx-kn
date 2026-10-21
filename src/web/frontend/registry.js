@@ -14,5 +14,4 @@ export const VIEWS = [
   { id: 'settings', title: '设置', component: lazy(() => import('../../modules/settings/view.jsx')) },
   { id: 'kb', title: '知识库', component: lazy(() => import('../../modules/kb/view.jsx')) },
   { id: 'crawl', title: '资料采集', tab: false, component: lazy(() => import('../../modules/crawl/view.jsx')) },
-  { id: 'needdo', title: 'NeedDo', component: lazy(() => import('../../modules/needdo/view.jsx')) },
 ];

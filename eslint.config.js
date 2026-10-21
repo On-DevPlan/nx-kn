@@ -72,7 +72,6 @@ export default defineConfig([
       'src/modules/settings/**/*.{js,jsx}',
       'src/modules/kb/**/*.{js,jsx}',
       'src/modules/crawl/**/*.{js,jsx}',
-      'src/modules/needdo/**/*.{js,jsx}',
     ],
     rules: {
       'no-restricted-imports': [
@@ -89,8 +88,6 @@ export default defineConfig([
                 '../kb/**',
                 '../crawl/*',
                 '../crawl/**',
-                '../needdo/*',
-                '../needdo/**',
               ],
               message: '模块之间不得互相依赖；共享逻辑请下沉到 core/。',
             },

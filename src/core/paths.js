@@ -69,49 +69,6 @@ export function crawlDelayMs() {
   return 300;
 }
 
-// ---- NeedDo（混乱输入收件箱）----
-//
-// 收件箱的文件型条目（PDF/DOCX 原件 + 提取出的纯文本）落在数据目录的 needdo/ 下，
-// 元数据（条目列表、主题、状态）仍进 store.json——与采集域同一个分工：
-// 大内容进文件，小索引进 store。跟 sources 一样放在数据目录（跟 store.json 走），
-// NX_KN_STORE 搬到哪它就跟到哪，测试指向临时目录即天然隔离。
-export const NEEDDO_DIRNAME = 'needdo';
-
-export function needdoDir() {
-  return join(dataDirFromEnv(), NEEDDO_DIRNAME);
-}
-
-// 收件箱接受的原件类型。白名单而不是黑名单：收件箱是「什么都往里丢」的地方，
-// 但执行面（解压/解析）只对声明过的类型负责，没声明的礼貌拒绝。
-export const NEEDDO_FILE_EXTS = ['pdf', 'docx', 'txt', 'md'];
-
-// 单个文件条目的体积上限（字节）。Web 端走 JSON base64 上传，HTTP 层全局 4MB
-// 请求体上限先卡着；这里再卡一道二进制口径（3MB ≈ base64 后 4MB），错误信息给得早。
-export const NEEDDO_FILE_MAX_BYTES = 3 * 1024 * 1024;
-
-// ---- 回收站（软删除）----
-//
-// 删除先进这里，而不是当场抹掉：收件箱里随手丢进来的东西往往**没有第二份**
-// （一段粘贴的文字、一个别人发来的 PDF），误删的代价远超留住它们的成本。
-// 原件用 rename 搬进 trash/（同一文件系统内是瞬时的），条目落 needdo.trash[]。
-// 淘汰两条规则同时生效，谁先到算谁：超过天数，或超过条数（按删除时间从旧到新丢）。
-export function needdoTrashDir() {
-  return join(needdoDir(), 'trash');
-}
-
-export const NEEDDO_TRASH_MAX_DAYS = 30;
-export const NEEDDO_TRASH_MAX_ITEMS = 200;
-
-// ---- 沉淀（导出到知识库）----
-//
-// 导出物是**普通 markdown 目录**，与 crawl 的产物逐字同构（同一套模具：落盘 → 自动登记
-// 为知识库 → 让人自己跑 index）。目标根**只能是 needdo/export/**，绝不能是 needdo/ 本身——
-// 那里装着原件二进制、提取 txt、trash/ 与 processed/ 报告，登记它等于把回收站和流水
-// 报告一起塞进索引（排除名单只有 .obsidian/.trash，挡不住）。
-export function needdoExportDir() {
-  return join(needdoDir(), 'export');
-}
-
 // ---- 守护（watch）----
 //
 // 监听已登记的库，笔记一变就自动跑增量索引。这里只放「防抖窗口」这一个参数。
