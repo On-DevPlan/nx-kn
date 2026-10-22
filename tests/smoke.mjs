@@ -260,6 +260,7 @@ function fakeVault(withDocs = true) {
   if (withDocs) {
     writeFileSync(join(dir, 'nx-kn', 'base-content.md'), '# 内容生成规范\n', 'utf8');
     writeFileSync(join(dir, 'nx-kn', 'questionnaire.md'), '# 问卷模式 · 内容规范\n', 'utf8');
+    writeFileSync(join(dir, 'nx-kn', 'frontmatter-spec.md'), '# Frontmatter 生成规范\n', 'utf8');
   }
   return dir;
 }
@@ -273,28 +274,27 @@ test('obsidian get：未配置时给出引导而不是报错（业务结果，�
   assert.match(r.hints.join('\n'), /obsidian set/);
 });
 
-test('obsidian set → get：vault 与规范目录写读闭环走真实存储', async () => {
+test('obsidian set → get：vault 与规范文档登记表写读闭环走真实存储', async () => {
   const { env } = isolatedEnv();
   const vault = fakeVault();
-  await run('obsidian set vault=' + vault + ' specDir=nx-kn', env);
+  await run('obsidian set vault=' + vault, env);
 
   const r = JSON.parse((await run('obsidian get --json', env)).stdout);
   assert.equal(r.configured, true);
   assert.equal(r.source, 'store');
   assert.equal(r.vault, vault);
-  assert.equal(r.specDir, join(vault, 'nx-kn'));
   assert.equal(r.hasObsidianMarker, true);
   assert.ok(r.docs.every((d) => d.exists === true), '两份规范文档都应存在');
 });
 
-test('obsidian spec：给出 skill 要读的两份文档的绝对路径', async () => {
+test('obsidian spec：给出 skill 要读的几份文档的绝对路径', async () => {
   const { env } = isolatedEnv();
   const vault = fakeVault();
   await run('obsidian set vault=' + vault, env);
 
   const r = JSON.parse((await run('obsidian spec --json', env)).stdout);
   assert.equal(r.configured, true);
-  assert.deepEqual(r.docs.map((d) => d.key), ['content', 'questionnaire']);
+  assert.deepEqual(r.docs.map((d) => d.key), ['content', 'questionnaire', 'frontmatter']);
   assert.equal(r.docs[0].path, join(vault, 'nx-kn', 'base-content.md'));
   assert.equal(r.docs[1].path, join(vault, 'nx-kn', 'questionnaire.md'));
   assert.ok(r.docs.every((d) => d.exists === true));
@@ -326,10 +326,10 @@ test('obsidian spec：规范文档缺失时如实报缺失并指名配置键', a
   const r = JSON.parse((await run('obsidian spec --json', env)).stdout);
   assert.equal(r.configured, true);
   assert.ok(r.docs.every((d) => d.exists === false));
-  assert.match(r.hints.join('\n'), /contentDoc/);
+  assert.match(r.hints.join('\n'), /docs\.content/);
 });
 
-test('obsidian set：白名单外的键被拒绝；specDir 必须是 vault 内相对路径', async () => {
+test('obsidian set：白名单外的键被拒绝；登记项路径必须是相对 vault 根的', async () => {
   const { env } = isolatedEnv();
   await assert.rejects(
     () => run('obsidian set hacker=yes', env),
@@ -339,7 +339,7 @@ test('obsidian set：白名单外的键被拒绝；specDir 必须是 vault 内�
     }
   );
   await assert.rejects(
-    () => run('obsidian set specDir=C:\\elsewhere', env),
+    () => run('obsidian set docs.content=C:\\elsewhere', env),
     (err) => {
       assert.match(err.stderr, /必须是相对路径/);
       return true;
@@ -354,5 +354,72 @@ test('obsidian get：人类可读输出（skill 与人都在用这条命令）',
   const { stdout } = await run('obsidian get', env);
   assert.match(stdout, /【存在】/);
   assert.match(stdout, /base-content\.md/);
+});
+
+test('obsidian set docs.<key>：登记与注销都走真实存储', async () => {
+  const { env } = isolatedEnv();
+  const vault = fakeVault();
+  await run('obsidian set vault=' + vault + ' docs.style=nx-kn/我的风格.md', env);
+
+  const got = JSON.parse((await run('obsidian get --json', env)).stdout);
+  assert.equal(got.config.docs.style, 'nx-kn/我的风格.md');
+  assert.equal(got.config.docs.content, 'nx-kn/base-content.md', '默认登记项仍在');
+
+  // 空值 = 注销
+  await run('obsidian set docs.style=', env);
+  const after = JSON.parse((await run('obsidian get --json', env)).stdout);
+  assert.equal('style' in after.config.docs, false);
+});
+
+test('obsidian spec --doc：直接输出规范文档全文（skill 拿「内容要求」靠它）', async () => {
+  const { env } = isolatedEnv();
+  const vault = fakeVault();
+  await run('obsidian set vault=' + vault, env);
+
+  const { stdout } = await run('obsidian spec --doc content', env);
+  assert.match(stdout, /# 内容生成规范/);
+
+  const r = JSON.parse((await run('obsidian spec --doc content --json', env)).stdout);
+  assert.equal(r.key, 'content');
+  assert.match(r.content, /# 内容生成规范/);
+});
+
+test('obsidian scan：列出未解析双链（外部 CLI 关掉时走内置解析）', async () => {
+  const { env } = isolatedEnv();
+  const vault = fakeVault();
+  writeFileSync(join(vault, '日常.md'), '见 [[红链]] 与 [[图.png]]\n', 'utf8');
+  await run('obsidian set vault=' + vault, env);
+
+  const r = JSON.parse((await run('obsidian scan --json', { ...env, NX_OBSIDIAN_CLI: '0' })).stdout);
+  assert.equal(r.via, 'builtin');
+  assert.equal(r.count, 1);
+  assert.equal(r.links[0].link, '红链');
+  assert.equal(r.links[0].sources[0].file, '日常.md');
+});
+
+test('obsidian frontmatter：输出的 YAML 可直接当 Write content 开头', async () => {
+  const { env } = isolatedEnv();
+  const vault = fakeVault();
+  await run('obsidian set vault=' + vault, env);
+
+  const { stdout } = await run('obsidian frontmatter --link 目标 --source 日常/foo.md', env);
+  assert.match(stdout, /^---\n/);
+  assert.match(stdout, /creatime: \d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}/);
+  assert.match(stdout, /tags: \[\]/);
+  assert.match(stdout, /  - "\[\[foo\]\]"/);
+});
+
+test('obsidian check：存快照 → 写新笔记 → 差分（发现新引入的红链）', async () => {
+  const { env } = isolatedEnv();
+  const vault = fakeVault();
+  await run('obsidian set vault=' + vault, env);
+
+  await run('obsidian check --snapshot snap.json', env);
+  writeFileSync(join(vault, '新笔记.md'), '见 [[新红链]]\n', 'utf8');
+
+  const r = JSON.parse((await run('obsidian check --snapshot-before snap.json --new-file 新笔记.md --json', env)).stdout);
+  assert.equal(r.passed, false);
+  assert.equal(r.newUnresolved.length, 1);
+  assert.equal(r.newUnresolved[0].link, '新红链');
 });
 

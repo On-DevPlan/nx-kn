@@ -141,11 +141,15 @@ export function defaultEmbeddingFromEnv() {
 // 注意别和上面的 NX_KN_VAULT 混：那个只服务 kb 域（检索索引）。
 export const OBSIDIAN_VAULT_ENV = 'NX_OBSIDIAN_VAULT';
 
-// 规范文档的默认位置：<vault>/nx-kn/ 下两个固定文件名。
+// 规范文档的默认登记项：**相对 vault 根**的路径。
+// 用「登记表」而不是固定的两个字段，是为了能登记第三份、第四份规范
+// （写作风格、frontmatter 规范、术语表……）而不改代码。
 // 常量放这里而不是模块里：store.js 的 initialState() 补默认值也要用它。
-export const OBSIDIAN_DEFAULT_SPEC_DIR = 'nx-kn';
-export const OBSIDIAN_DEFAULT_CONTENT_DOC = 'base-content.md';
-export const OBSIDIAN_DEFAULT_QUESTIONNAIRE_DOC = 'questionnaire.md';
+export const OBSIDIAN_DEFAULT_DOCS = {
+  content: 'nx-kn/base-content.md',
+  questionnaire: 'nx-kn/questionnaire.md',
+  frontmatter: 'nx-kn/frontmatter-spec.md',
+};
 
 export function obsidianVaultFromEnv() {
   const v = process.env[OBSIDIAN_VAULT_ENV];

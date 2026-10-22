@@ -22,15 +22,18 @@
   --row-h: 28px;
   --btn-h: 32px;
   --fs-core: 12px;
-  --radius-btn: 8px;
 
-  /* 立体感三件套：常态 / 按下 / 内凹（表单聚焦）。
-     只在这三处用，别扩散到卡片和列表——那会让界面变吵。 */
-  --shadow-relief: -1px -1px 2px rgba(255, 255, 255, 0.85), 2px 2px 6px rgba(20, 22, 26, 0.07);
-  --shadow-relief-press: inset 1px 1px 2px rgba(20, 22, 26, 0.1),
-    inset -1px -1px 2px rgba(255, 255, 255, 0.7);
+  /* 圆角三档：面板 / 控件 / 胶囊。全界面只许用这三档（外加 tag 的胶囊），
+     档位多了「圆角」就开始各自为政。 */
+  --radius-card: 14px;
+  --radius-ctl: 8px;
+  --radius-pill: 999px;
+
+  /* 立体感只剩两处：表单聚焦的内凹，与浮层（弹窗 / 提示条）的悬空。
+     卡片、按钮、行都不许有影——面板的层级靠底色深浅说，不靠影堆。 */
   --shadow-relief-inset: inset 1px 1px 2px rgba(20, 22, 26, 0.06),
     inset -1px -1px 2px rgba(255, 255, 255, 0.9);
+  --shadow-float: 0 16px 40px rgba(20, 22, 26, 0.14), 0 2px 8px rgba(20, 22, 26, 0.06);
 }
 
 body {

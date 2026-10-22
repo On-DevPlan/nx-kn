@@ -1,4 +1,4 @@
-/* 策略：列表行（纸上规范）。28px 行高、发丝线分隔；min-width 约定同骨架原版。 */
+/* 策略：列表行（软极简）。28px 行高、发丝线分隔；hover 用深一档的灰（行躺在浅灰卡片上）。 */
 .row {
   display: flex;
   align-items: center;
@@ -6,7 +6,7 @@
   padding: 0 12px;
   border-bottom: 1px solid var(--soft-2);
 }
-.row:hover { background: var(--soft); }
+.row:hover { background: var(--soft-2); }
 .row:last-child { border-bottom: 0; }
 .row .name { font-weight: 600; min-width: 22ch; max-width: 40%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .row .desc { color: var(--mid); flex: 1; min-width: 0; padding-left: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

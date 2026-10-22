@@ -4,46 +4,149 @@
 
 ## [Unreleased]
 
+### Added — 项目域提问的位置入口 `nx-kn obsidian ask`
+
+- 新增 `nx-kn obsidian ask --question "<原始提问>" [--project <项目根>]`：项目域提问的**唯一位置入口**——定位 / 首次初始化 `<vault>/projects/<项目名>/Base-<项目名>.md`（frontmatter 带 `project` 绑定），把提问清洗成合法文件名后以 `[[…]]` 追加到根文档**末尾**（幂等：重复提问不重复追加），并返回标准 9 步流程要用的全部定位信息（根文档相对路径 / 追加行号 / 答案笔记路径 / 项目根）。
+- 不带 `--question` 时仅定位 / 初始化根文档（项目解读首次建树的入口）；项目名按 package.json → Cargo.toml → pyproject.toml → 目录名推导，`@scope` 前缀自动去掉。
+- skill SOP 同步收紧：项目域提问一律先跑 `ask`，位置只由它的返回值决定；**agent 禁止自行决定答案笔记位置、禁止创建任何文档树 / 索引 / MOC / 清单文件**（此前 agent 反复冗余地建树建索引）。
+
+## [0.4.2] - 2026-10-22
+
+### Changed — 首页冷启动与设置子页
+
+- 首页不再加载流水线总览；采集源与索引状态移动到「设置 → 流水线」子页，只有进入子页才请求相关 API。
+- 修复设置面板 POST 裸键未被 `settings.set` 读取、界面提示已保存但实际未落盘的问题。
+- 统一全局开发 shim 从 `package.json` 的 `bin` 字段读取入口，修复错误指向不存在的 `bin/nx-kn.mjs`。
+
+### Added — Obsidian 知识库管理与双链项目解读
+
+- 新增 Obsidian 默认知识库配置与规范文档登记表；支持 `nx-kn obsidian spec` 列表，以及 `spec --doc <key>` 直接获取规范全文。
+- 将未解析双链扫描、frontmatter 生成和差分校验集成到 nx-kn 命令；从 skill 内移除 Python 脚本。
+- 新增项目解读 SOP：初始化 `<vault>/projects/<项目名>/Base-<项目名>.md` 作为根节点，单项文档之间通过双链建立关系；对文档中的 `[[问题]]`，根据 frontmatter 的 `project` 字段读取对应仓库源码后回答。
+- `frontmatter --project <项目根>` 将项目路径写入文档元数据，供后续源码问答定位项目。
+- 将 frontmatter 规范放入 Obsidian vault，并登记为 `frontmatter` 规范项。
+
+### Changed — UI 软极简
+
+- 卡片改为圆角浅灰面板，去除双线边框；按钮改胶囊形；弹窗与提示条使用圆角和柔和阴影。
+- 保持黑白灰配色，统一圆角 token，避免双线与直角混用。
+
+### Fixed — POST 请求体错误处理
+
+坏 JSON body 现在返回 400 `INVALID_INPUT`，不再被静默当成空参数并回报成功。
+
+### Fixed — 全局安装入口
+
+`link:local` 的启动脚本入口改从 `package.json` 的 `bin` 字段读取。
+
+### Changed — 完全冷启动：采集源与索引管理移入「设置 → 流水线」子页
+
+面板原先在两处挂载即拉昂贵状态：首页的「流水线总览」拉 `/api/crawl/list` 与
+`/api/kb/status`（后者要探 zg、逐库起子进程）；知识库页还嵌入采集源管理并在挂载时
+请求同一批接口。现在：
+
+- **「设置 → 流水线」子页是唯一的采集/索引管理入口**：流水线总览（①② 阶段 + 一键
+  跑流水线）、知识库管理（zg/索引状态、库列表、添加/移除、增量/重建索引、守护）、
+  采集源管理（添加/抓取/移除）全部集中在这里；
+- 子页**点开才挂载**（不查看，不加载），切走即卸载——首页与设置页的冷启动都不碰
+  这些接口；首页冷启动只剩 `/api/bootstrap` 与 `/api/routes` 两个轻请求；
+- **知识库页改为纯检索**：查询表单 + 命中结果。查询本身会返回业务结果
+  （未建索引时给出可照做的提示），不需要先拉一遍状态来垫底；
+- 知识库检索的等价 CLI 提示收窄为 `nx-kn query`；管理命令的提示跟随管理面。
+
+### Fixed — 设置面板的保存按钮此前是假的
+
+`settings.set` 的 `run()` 只读 CLI 的 `k=v` 位置参数（`ctx.pairs`），而面板 POST 的是
+JSON 裸键 → patch 恒为空 → service 返回 `skipped` → 界面照弹「已保存」，**实际什么都没写**。
+现在两侧都接（CLI k=v / 面板裸键），与 obsidian 域同款。
+
+### Added — 项目解读模式：读大项目 → 生成文档 → 双链拷问
+
+`nx-kn obsidian frontmatter` 新增 `--project <项目根>`：把 `project: "<项目根>"`
+写进 frontmatter，将「这篇文档」与「哪个代码库」绑定。配套的
+`kn-obsidian-repair-unresolved-links` skill 新增**项目解读模式**（SOP 里的一个特殊场景）：
+
+1. **阶段 A（在项目里）**：探索项目 → 按内容规范生成文档到 vault 指定目录
+   （默认约定 `<vault>/projects/<项目名>/`），每篇 frontmatter 带 `project` 字段；
+2. **阶段 B（在 vault 里）**：用户在文档里写 `[[问题]]` → 跑标准 9 步流程，
+   唯一差别是**步骤 6 必须读项目源码**——答案要落在具体代码上（`文件:行号`、
+   真实行为、设计取舍），发现文档写得不对要当场指出，而不是复述文档。
+
+### Changed — `kn-obsidian-repair-unresolved-links` 收成单一 SOP，规范一律走 nx-kn
+
+这个 skill 的定位是**讲清整个 SOP + 引导用 CLI 拿关键上下文与流程点**，所以它现在只有
+**一个文件**（`SKILL.md`），没有 `references/`、没有脚本：
+
+- **步骤 0 = 先列清单、再按用途取**：先 `nx-kn obsidian spec` 拿到登记项清单
+  （key + 相对路径 + 是否存在），再按用途取具体那几份
+  `nx-kn obsidian spec --doc <key>`（直接输出全文）。key 由用户自定，默认约定是
+  `content`（内容生成规范）/ `questionnaire`（问卷模式规范）/ `frontmatter`（frontmatter 细则）。
+  **清单里没有对应用途的那份 → 停下来问用户**，不许凭记忆编规范。
+- **frontmatter 规范也搬进 vault**（`<vault>/nx-kn/frontmatter-spec.md`，登记为
+  `docs.frontmatter`）——原先它住在 skill 的 `references/00-frontmatter-spec.md`。
+  现在 skill 里只保留**必须遵守的硬约束**（Write content 必须以 `---` 开头、
+  必须用命令生成而非手写），细则按需从 vault 取。
+- 原 skill 的 `references/` 目录已删除；安装产物只有 `SKILL.md` 一个文件。
+
 ### Added — `obsidian` 域：vault 定位与内容规范文档的可配置解耦
 
-新增独立功能域 `obsidian`，专门回答一句话：**「内容规范文档在哪」**。
+新增独立功能域 `obsidian`，专门回答一句话：**「内容规范文档在哪、里面写了什么」**。
 
 ```
-nx-kn obsidian get                  # 读配置与解析后的路径（vault 来源 / 规范目录 / 文档存在性）
-nx-kn obsidian set k=v...           # 写配置：vault=<绝对路径> / specDir=<vault内相对路径>
-                                     #          contentDoc= / questionnaireDoc=（空值=复位）
-nx-kn obsidian spec                 # 解析两份规范文档的绝对路径——skill 消费契约
+nx-kn obsidian get                  # 读配置与解析结果（vault 来源 / 规范文档登记表 / 文档存在性）
+nx-kn obsidian set k=v...           # 写配置：vault=<绝对路径> / docs.<key>=<相对vault根的路径>
+nx-kn obsidian spec [--doc <key>]   # 不给 --doc 列出登记项；给了 --doc **直接输出文档全文**
+nx-kn obsidian scan                 # 扫 vault 里的未解析双链
+nx-kn obsidian frontmatter --link <文本> [--source <文件>] [--locate]
+nx-kn obsidian check --snapshot <文件> / --snapshot-before <文件> --new-file <相对路径>
 ```
 
-配置落在 `store.json` 顶层 `obsidian{}`：`vault` / `specDir`（默认 `nx-kn`）/
-`contentDoc`（默认 `base-content.md`）/ `questionnaireDoc`（默认 `questionnaire.md`）。
-vault 解析链：`store.obsidian.vault` > 环境变量 `NX_OBSIDIAN_VAULT` > 第一个含 `.obsidian/`
-的 `kb.vaults[]` 登记库 > 未设置。**兜底只在「未设置」时发生**——设了却指错地方会如实报
-「目录不存在」，不会悄悄换成另一个库（那会把配置错误藏进每一篇按错规范写出的笔记里）。
-未配置是**业务结果**不是错误：`get` / `spec` 返回 `configured:false` + 可照做的提示，只有
-`set` 会因参数非法 / 目录不存在而报错（400 / 404）。
+配置落在 `store.json` 顶层 `obsidian{}`：`vault` / `docs{}`（**登记表**：key → 相对 vault
+根的路径，可增删任意 key）。vault 解析链：`--vault` > `store.obsidian.vault` > 环境变量
+`NX_OBSIDIAN_VAULT` > 第一个含 `.obsidian/` 的 `kb.vaults[]` 登记库 > 从当前目录沿父目录找
+`.obsidian`。**兜底只在「未设置」时发生**——设了却指错地方会如实报「目录不存在」，不会悄悄
+换成另一个库（那会把配置错误藏进每一篇按错规范写出的笔记里）。未配置是**业务结果**不是错误：
+返回 `configured:false` + 可照做的提示，只有 `set` 会因参数非法 / 目录不存在而报错（400 / 404）。
 
-面板新增「Obsidian」tab：表单 + 「解析结果」卡片（vault 来源、`.obsidian` 标记、规范目录、
-两份文档的存在性）。
+面板新增「Obsidian」页：vault 表单 + 规范文档登记表编辑器 + 解析结果卡片。
+
+### Added — 双链修复的三支脚本收进 nx-kn（skill 不再自带脚本）
+
+原先 `kn-obsidian-repair-unresolved-links` skill 自带三个 Python 脚本
+（`scan_unresolved.py` / `gen_frontmatter.py` / `postcheck.py`，约 700 行）。它们现在都是
+nx-kn 的命令，**skill 装完即可用，不再需要 python**：
+
+- `nx-kn obsidian scan` —— 扫未解析双链。逐条对照移植原脚本的规则（解码链
+  `utf-8 → gbk → 替换`、代码围栏与行内代码剔除、附件扩展名忽略、自链接抑制、
+  路径 / basename 两级索引、`ctl/tmpl_*` 跳过），**已用差分测试与原 Python 脚本逐条比对一致**。
+- `nx-kn obsidian frontmatter` —— 生成 frontmatter YAML 段（`creatime` / `tags` / `bklink`），
+  与原脚本输出逐条一致（仅时间戳与行尾差异：原脚本在 Windows 上是 CRLF）。
+- `nx-kn obsidian check` —— snapshot / 差分校验，保留原脚本的 6 条根因诊断文案。
+
+**扫未解析双链优先用外部 `obsidian` 命令行**（它与 Obsidian 实际解析最接近），
+不可用时**自动回退内置解析**并用 `via` 字段标明来源。旧 `postcheck.py` 的策略是
+「命令起不来才回退」，于是「命令存在却不是 CLI」（本机 `PATH` 上的 `obsidian` 就是
+图形界面本体）时会硬失败——移植时没照抄这个坑。另外，探测器会按**磁盘上的真实文件名**
+识别 GUI 本体并直接跳过，否则每次扫描都会把 Obsidian 窗口弹到用户面前。
 
 ### Changed — `kn-obsidian-repair-unresolved-links` 不再内置内容规范
 
 「四种内容模式」与「问卷模式」两份规范原先打包在 skill 的 `references/10-content-patterns.md`
 与 `references/20-questionnaire.md` 里，用户要改规范只能改 skill 源码再重装。现已改为
-**从 vault 现读**：
-
-- skill 新增「步骤 0：解析规范文档与 vault」，用 `nx-kn obsidian spec --json` 拿到
-  `{content_spec}` / `{questionnaire_spec}` / `{vault_root}`；命令不存在或返回
-  `configured:false` 时按 `NX_OBSIDIAN_VAULT` → 沿父目录找 `.obsidian` → `<vault>/nx-kn/`
-  的目录约定兜底。**两份文档任一缺失就停下来问用户**，不许凭记忆编规范。
-- 两个 1 字节的 reference 文件已删除（内容早已迁进 vault，留着只是悬空指针）；
-  `references/00-frontmatter-spec.md` 保留（它讲的是 `gen_frontmatter.py` 的机制，不是内容风格）。
-- 并发模式下由主线程解析后注入 subagent prompt（与既有的 `{frontmatter_yaml}` 注入同构），
-  模板内另留一行自解析兜底。
-- skill 自带的三个 python 脚本统一带 `--vault {vault_root}`，让脚本侧与 nx-kn 的解析结果同源。
+**从 vault 现读**：skill 新增「步骤 0：拿内容要求」，用 `nx-kn obsidian spec --doc content`
+直接取规范全文（不必知道路径、不必自己 Read，SKILL.md 里也不再有 `{content_spec}` 这类
+占位符）。命令不存在或报「vault 未设置」时按 `NX_OBSIDIAN_VAULT` → 沿父目录找 `.obsidian`
+→ `<vault>/nx-kn/` 的目录约定兜底；**规范取不到就停下来问用户**，不许凭记忆编。
 
 **为什么这么改**：内容规范是**用户的写作偏好**，会频繁迭代；skill 是**工具**，不该背着
 用户的内容要求一起发版。解耦之后，改规范 = 改 vault 里的一份 markdown，skill 不用重装。
+
+### Fixed — `link:local` 的全局 shim 指向了不存在的入口文件
+
+`scripts/link-local.mjs` 把全局 `nx-kn` 的启动器写死为 `bin/nx-kn.mjs`，而仓库的入口
+早已是 `bin/kn.mjs`——于是 `link:local` 显示「已指向本仓库」（探测只看路径前缀）、
+实际全局命令一跑就 `MODULE_NOT_FOUND`。现在 bin 入口从 package.json 的 `bin` 字段取，
+不再写死。
 
 ### Fixed — POST 的坏 JSON body 不再被静默当成「空参数 + 成功」
 

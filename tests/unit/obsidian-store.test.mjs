@@ -1,8 +1,7 @@
-// obsidian 域：vault 定位与「内容规范文档」路径解析的规则钉死。
+// obsidian 域：vault 定位、规范文档登记表、以及三个双链修复动作。
 //
-// 这套规则错在哪都不会报错，只会**静默地写错笔记**：
-// 规范解析到错的文件 → agent 按另一套内容风格写；vault 指错 → 规范路径整个落空。
-// 所以每条边界都用测试钉住，尤其是三条：
+// 这套规则错在哪都不会报错，只会**误建笔记**（把已存在的笔记当成红链，又建一份）
+// 或**读错规范**（按另一套内容风格写）。所以每条边界都钉住，尤其是三条：
 //   1. 兜底只在「未设置」时发生，不在「设了但坏了」时发生（否则配置错误被藏起来）
 //   2. 未设置是**业务结果**不是错误（skill 侧只需判标志位）
 //   3. 归一化永不抛（它跑在每次 loadStore 里，包括 store 损坏隔离那条路径）
@@ -31,27 +30,37 @@ function fakeVault(withDocs = true) {
   if (withDocs) {
     writeFileSync(join(dir, 'nx-kn', 'base-content.md'), '# 内容生成规范\n', 'utf8');
     writeFileSync(join(dir, 'nx-kn', 'questionnaire.md'), '# 问卷模式 · 内容规范\n', 'utf8');
+    writeFileSync(join(dir, 'nx-kn', 'frontmatter-spec.md'), '# Frontmatter 生成规范\n', 'utf8');
   }
   return dir;
 }
 
 // ---- 归一化：形状与垃圾输入 ----
 
-test('initialState() 的 obsidian 形状固定（默认值即 vault 现状的约定位置）', () => {
+test('initialState() 的 obsidian 形状固定（登记表 = 相对 vault 根的路径）', () => {
   assert.deepEqual(initialState().obsidian, {
     vault: '',
-    specDir: 'nx-kn',
-    contentDoc: 'base-content.md',
-    questionnaireDoc: 'questionnaire.md',
+    docs: {
+      content: 'nx-kn/base-content.md',
+      questionnaire: 'nx-kn/questionnaire.md',
+      frontmatter: 'nx-kn/frontmatter-spec.md',
+    },
   });
 });
 
 test('normalize: obsidian 缺字段逐个补默认，部分键不影响其余键', () => {
   const n = normalize({ obsidian: { vault: 'D:\\V' } });
   assert.equal(n.obsidian.vault, 'D:\\V');
-  assert.equal(n.obsidian.specDir, 'nx-kn');
-  assert.equal(n.obsidian.contentDoc, 'base-content.md');
-  assert.equal(n.obsidian.questionnaireDoc, 'questionnaire.md');
+  assert.equal(n.obsidian.docs.content, 'nx-kn/base-content.md');
+  assert.equal(n.obsidian.docs.questionnaire, 'nx-kn/questionnaire.md');
+  assert.equal(n.obsidian.docs.frontmatter, 'nx-kn/frontmatter-spec.md');
+});
+
+test('normalize: 登记表已存在时**不补默认**（注销过的项要能留住）', () => {
+  // 用户显式注销了 content —— 下次读取不能悄悄给它装回来
+  const n = normalize({ obsidian: { vault: 'D:\\V', docs: { questionnaire: 'nx-kn/q.md' } } });
+  assert.deepEqual(n.obsidian.docs, { questionnaire: 'nx-kn/q.md' });
+  assert.equal('content' in n.obsidian.docs, false);
 });
 
 test('normalize: obsidian 是垃圾输入时回落默认且**不抛**（normalize 跑在每次 load 里）', () => {
@@ -61,16 +70,28 @@ test('normalize: obsidian 是垃圾输入时回落默认且**不抛**（normaliz
   }
 });
 
-test('normalize: specDir 的反斜杠归一为 /（跨平台同一份配置）', () => {
-  assert.equal(normalize({ obsidian: { specDir: 'a\\b' } }).obsidian.specDir, 'a/b');
+test('normalize: 旧形状（specDir + contentDoc）迁移成登记表', () => {
+  const n = normalize({
+    obsidian: { vault: 'D:\\V', specDir: 'nx-kn', contentDoc: 'base-content.md', questionnaireDoc: 'questionnaire.md' },
+  });
+  assert.equal(n.obsidian.docs.content, 'nx-kn/base-content.md');
+  assert.equal(n.obsidian.docs.questionnaire, 'nx-kn/questionnaire.md');
+  assert.equal(n.obsidian.docs.frontmatter, 'nx-kn/frontmatter-spec.md', '迁移时也补齐其余默认登记项');
+  assert.equal('specDir' in n.obsidian, false, '旧键不再保留（照 kb 的先例）');
+  assert.equal('contentDoc' in n.obsidian, false);
+});
+
+test('normalize: 登记表里的反斜杠归一为 /（跨平台同一份配置）', () => {
+  assert.equal(normalize({ obsidian: { docs: { content: 'a\\b.md' } } }).obsidian.docs.content, 'a/b.md');
 });
 
 // ---- vault 解析链 ----
 
-test('vault 解析：store 配置 > 环境变量 > kb 登记库兜底', async () => {
+test('vault 解析：--vault 参数 > store 配置 > 环境变量 > kb 登记库兜底', async () => {
   const dir = tmpData();
   const envVault = fakeVault();
   const kbVault = fakeVault();
+  const flagVault = fakeVault();
 
   // 1) 什么都没设 → 未设置（业务结果，不是错误）
   let r = await obsidian.resolvePaths();
@@ -100,6 +121,11 @@ test('vault 解析：store 配置 > 环境变量 > kb 登记库兜底', async ()
   r = await obsidian.resolvePaths();
   assert.equal(r.source, 'store');
   assert.equal(r.vault, kbVault);
+
+  // 5) --vault 参数压过一切
+  r = await obsidian.resolvePaths({ flagVault });
+  assert.equal(r.source, 'flag');
+  assert.equal(r.vault, flagVault);
 });
 
 test('vault 设了但目录被删：如实报 vaultExists=false，**不静默兜底到别的库**', async () => {
@@ -118,9 +144,9 @@ test('vault 设了但目录被删：如实报 vaultExists=false，**不静默兜
   assert.ok(r.hints.some((h) => h.includes('不存在')), '要明确报「目录不存在」');
 });
 
-// ---- 规范文档解析 ----
+// ---- 规范文档登记与读取 ----
 
-test('规范文档解析：默认落在 <vault>/nx-kn/ 下两份文件，存在性如实反映', async () => {
+test('规范文档解析：默认三条登记项，存在性如实反映', async () => {
   tmpData();
   const vault = fakeVault();
   await mutateStore((s) => {
@@ -128,53 +154,58 @@ test('规范文档解析：默认落在 <vault>/nx-kn/ 下两份文件，存在�
   });
 
   const r = await obsidian.resolvePaths();
-  assert.equal(r.specDir, join(vault, 'nx-kn'));
-  assert.equal(r.specDirExists, true);
-  assert.equal(r.docs.length, 2);
-  assert.deepEqual(r.docs.map((d) => d.key), ['content', 'questionnaire']);
+  assert.equal(r.docs.length, 3);
+  assert.deepEqual(r.docs.map((d) => d.key), ['content', 'questionnaire', 'frontmatter']);
+  assert.equal(r.docs[0].rel, 'nx-kn/base-content.md');
   assert.equal(r.docs[0].path, join(vault, 'nx-kn', 'base-content.md'));
   assert.equal(r.docs[0].exists, true);
-  assert.equal(r.docs[1].exists, true);
   assert.equal(r.hints.length, 0, '一切正常时不该有提示');
 });
 
-test('规范文档缺失：指名对应的配置键，别让人猜', async () => {
+test('规范文档缺失：指名对应的登记项，别让人猜', async () => {
   tmpData();
-  const vault = fakeVault(false); // 一份文档都不写
+  const vault = fakeVault(false);
   await mutateStore((s) => {
     s.obsidian.vault = vault;
   });
 
   const r = await obsidian.resolvePaths();
   assert.equal(r.docs.every((d) => d.exists === false), true);
-  assert.ok(r.hints.some((h) => h.includes('contentDoc')));
-  assert.ok(r.hints.some((h) => h.includes('questionnaireDoc')));
+  assert.ok(r.hints.some((h) => h.includes('docs.content')));
 });
 
-test('spec() 是给 agent 的最小契约：形状固定，没问题时不带 hints', async () => {
+test('spec({doc})：直接给出文档全文（skill 靠它拿「内容要求」）', async () => {
   tmpData();
   const vault = fakeVault();
   await mutateStore((s) => {
     s.obsidian.vault = vault;
   });
 
-  const ok = await obsidian.spec();
-  assert.equal(ok.configured, true);
-  assert.equal(ok.vault, vault);
-  assert.deepEqual(Object.keys(ok.docs[0]).sort(), ['doc', 'exists', 'key', 'path']);
-  assert.equal('hints' in ok, false, '一切正常时不该出现 hints 字段');
-
-  const un = await obsidian.spec();
-  assert.equal(un.configured, true, '此时仍已配置');
-
-  // 清掉 vault → 未设置是**业务结果**（不抛），带可照做的 hints
-  await obsidian.set({ patch: { vault: '' } });
-  const un2 = await obsidian.spec();
-  assert.equal(un2.configured, false);
-  assert.ok(Array.isArray(un2.hints) && un2.hints.length > 0);
+  const r = await obsidian.spec({ doc: 'content' });
+  assert.equal(r.key, 'content');
+  assert.equal(r.exists, true);
+  assert.match(r.content, /# 内容生成规范/);
+  assert.equal(r.path, join(vault, 'nx-kn', 'base-content.md'));
 });
 
-// ---- set 的写入口校验 ----
+test('spec({doc})：未登记的 key 报「未登记」，已登记但文件缺失报「不存在」', async () => {
+  tmpData();
+  const vault = fakeVault(false);
+  await mutateStore((s) => {
+    s.obsidian.vault = vault;
+  });
+
+  await assert.rejects(
+    () => obsidian.spec({ doc: 'style' }),
+    (e) => e.code === 'NOT_FOUND' && /未登记/.test(e.message)
+  );
+  await assert.rejects(
+    () => obsidian.spec({ doc: 'content' }),
+    (e) => e.code === 'NOT_FOUND' && /不存在/.test(e.message)
+  );
+});
+
+// ---- set：写入口校验 ----
 
 test('set: 未知键被拒绝（白名单外的键不进 store）', async () => {
   tmpData();
@@ -184,23 +215,15 @@ test('set: 未知键被拒绝（白名单外的键不进 store）', async () => 
   );
 });
 
-test('set: specDir 拒绝绝对路径与 ..（规范文档必须在 vault 内）', async () => {
+test('set: 登记项路径必须是相对 vault 根的（拒绝绝对路径与 ..）', async () => {
   tmpData();
   await assert.rejects(
-    () => obsidian.set({ patch: { specDir: 'C:\\elsewhere' } }),
+    () => obsidian.set({ patch: { 'docs.content': 'C:\\elsewhere\\a.md' } }),
     (e) => e.code === 'INVALID_INPUT' && /必须是相对路径/.test(e.message)
   );
   await assert.rejects(
-    () => obsidian.set({ patch: { specDir: 'a/../b' } }),
+    () => obsidian.set({ patch: { 'docs.content': 'a/../b.md' } }),
     (e) => e.code === 'INVALID_INPUT' && /\.\./.test(e.message)
-  );
-});
-
-test('set: 文档名不许带路径分隔符（裸文件名）', async () => {
-  tmpData();
-  await assert.rejects(
-    () => obsidian.set({ patch: { contentDoc: 'a/b.md' } }),
-    (e) => e.code === 'INVALID_INPUT' && /路径分隔符/.test(e.message)
   );
 });
 
@@ -213,33 +236,157 @@ test('set: vault 目录不存在时报 NOT_FOUND（把路径原样回显，便�
   );
 });
 
-test('set: 写入后落盘，空值即复位', async () => {
+test('set: 登记与注销（空值 = 注销这一项）', async () => {
   tmpData();
   const vault = fakeVault();
-  const r = await obsidian.set({ patch: { vault } });
-  assert.deepEqual(r.written, ['vault']);
-  assert.equal(r.configured, true);
+  await obsidian.set({ patch: { vault, 'docs.style': 'nx-kn/我的风格.md' } });
 
   const onDisk = JSON.parse(readFileSync(process.env.NX_KN_STORE, 'utf8'));
   assert.equal(onDisk.obsidian.vault, vault);
-  assert.equal(onDisk.obsidian.specDir, 'nx-kn');
+  assert.equal(onDisk.obsidian.docs.style, 'nx-kn/我的风格.md');
+  assert.equal(onDisk.obsidian.docs.content, 'nx-kn/base-content.md', '默认登记项仍在');
 
-  // 空值 = 清除：回到未设置
+  await obsidian.set({ patch: { 'docs.style': '' } });
+  const after = JSON.parse(readFileSync(process.env.NX_KN_STORE, 'utf8'));
+  assert.equal('style' in after.obsidian.docs, false, '空值应注销该登记项');
+});
+
+test('set: 空值清空 vault → 回到未设置', async () => {
+  tmpData();
+  const vault = fakeVault();
+  await obsidian.set({ patch: { vault } });
   await obsidian.set({ patch: { vault: '' } });
   const after = await obsidian.resolvePaths();
   assert.equal(after.configured, false);
 });
 
-test('set: 文档名可改，规范目录跟着换（识别路径完全可配）', async () => {
+// ---- 扫未解析双链 ----
+
+test('scan: 列出未解析双链，附件/代码块/已有笔记都不算', async () => {
   tmpData();
   const vault = fakeVault();
-  mkdirSync(join(vault, 'docs'), { recursive: true });
-  writeFileSync(join(vault, 'docs', 'style.md'), '# 风格\n', 'utf8');
+  writeFileSync(
+    join(vault, '日常.md'),
+    [
+      '见 [[红链]]',
+      '附件 [[图.png]]',
+      '已有 [[base-content]]',
+      '```',
+      '代码块里的 [[不算]]',
+      '```',
+    ].join('\n'),
+  );
+  await mutateStore((s) => {
+    s.obsidian.vault = vault;
+  });
 
-  await obsidian.set({ patch: { vault, specDir: 'docs', contentDoc: 'style.md' } });
-  const r = await obsidian.resolvePaths();
-  assert.equal(r.specDir, join(vault, 'docs'));
-  assert.equal(r.docs[0].path, join(vault, 'docs', 'style.md'));
-  assert.equal(r.docs[0].exists, true);
-  assert.equal(r.docs[1].exists, false, '问卷文档没搬过来 → 如实报缺失');
+  const r = await obsidian.scan();
+  assert.equal(r.configured, true);
+  assert.equal(r.count, 1);
+  assert.equal(r.links[0].link, '红链');
+  assert.equal(r.links[0].sources[0].file, '日常.md');
+  assert.equal(r.links[0].sources[0].line, 1);
+});
+
+test('scan: vault 未设置是业务结果（不抛）', async () => {
+  tmpData();
+  const r = await obsidian.scan();
+  assert.equal(r.configured, false);
+  assert.equal(r.count, 0);
+  assert.ok(r.hints.length);
+});
+
+// ---- 生成 frontmatter ----
+
+test('frontmatter: YAML 形状与 bklink 来源（source 优先，其次 locate）', async () => {
+  tmpData();
+  const vault = fakeVault();
+  writeFileSync(join(vault, '引用者.md'), '这里引用了 [[目标]]\n');
+  await mutateStore((s) => {
+    s.obsidian.vault = vault;
+  });
+
+  const r = await obsidian.frontmatter({ link: '目标', source: '日常/foo.md' });
+  assert.match(r.yaml, /creatime: \d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}/);
+  assert.match(r.yaml, /tags: \[\]/);
+  assert.match(r.yaml, /  - "\[\[foo\]\]"/);
+  assert.equal(r.filename, '目标.md');
+
+  const r2 = await obsidian.frontmatter({ link: '目标', locate: true });
+  assert.match(r2.yaml, /  - "\[\[引用者\]\]"/);
+});
+
+test('frontmatter: --project 把文档和代码库绑在一起（项目解读模式）', async () => {
+  tmpData();
+  const vault = fakeVault();
+  await mutateStore((s) => {
+    s.obsidian.vault = vault;
+  });
+
+  const r = await obsidian.frontmatter({ link: '爬虫模块', source: '日常/foo.md', project: vault });
+  assert.equal(r.project, vault);
+  // Windows 路径的反斜杠要按 YAML 双引号标量转义，否则 \ 会被当转义序列
+  const expected = 'project: "' + vault.replace(/\\/g, '\\\\') + '"';
+  assert.ok(r.yaml.includes(expected), 'yaml 里应有 ' + expected + '，实际：\n' + r.yaml);
+
+  await assert.rejects(
+    () => obsidian.frontmatter({ link: 'x', project: join(tmpdir(), 'no-such-' + Date.now()) }),
+    (e) => e.code === 'NOT_FOUND' && /项目目录不存在/.test(e.message)
+  );
+});
+
+// ---- 校验：新笔记有没有引入新的未解析双链 ----
+
+test('check: 存快照 → 写入新笔记 → 差分，发现新引入的红链', async () => {
+  tmpData();
+  const vault = fakeVault();
+  await mutateStore((s) => {
+    s.obsidian.vault = vault;
+  });
+
+  const snap = await obsidian.check({ snapshot: 'snap.json' });
+  assert.equal(snap.mode, 'snapshot');
+  assert.equal(snap.count, 0);
+
+  // 写一篇带红链的新笔记
+  writeFileSync(join(vault, '新笔记.md'), '见 [[新出现的红链]]\n');
+
+  const diff = await obsidian.check({ snapshotBefore: 'snap.json', newFile: '新笔记.md' });
+  assert.equal(diff.mode, 'diff');
+  assert.equal(diff.passed, false);
+  assert.equal(diff.newUnresolved.length, 1);
+  assert.equal(diff.newUnresolved[0].link, '新出现的红链');
+});
+
+test('check: 没有新红链时 passed=true', async () => {
+  tmpData();
+  const vault = fakeVault();
+  await mutateStore((s) => {
+    s.obsidian.vault = vault;
+  });
+  await obsidian.check({ snapshot: 'snap.json' });
+  writeFileSync(join(vault, '干净笔记.md'), '没有链接\n');
+
+  const diff = await obsidian.check({ snapshotBefore: 'snap.json', newFile: '干净笔记.md' });
+  assert.equal(diff.passed, true);
+  assert.equal(diff.newUnresolved.length, 0);
+});
+
+test('check: 快照文件不存在 / 格式不对 → 明确报错', async () => {
+  tmpData();
+  const vault = fakeVault();
+  await mutateStore((s) => {
+    s.obsidian.vault = vault;
+  });
+
+  await assert.rejects(
+    () => obsidian.check({ snapshotBefore: 'nope.json', newFile: 'x.md' }),
+    (e) => e.code === 'NOT_FOUND' && /不存在/.test(e.message)
+  );
+
+  writeFileSync(join(vault, 'bad.json'), '[]', 'utf8');
+  await assert.rejects(
+    () => obsidian.check({ snapshotBefore: 'bad.json', newFile: 'x.md' }),
+    (e) => e.code === 'INVALID_INPUT' && /格式不对/.test(e.message)
+  );
 });

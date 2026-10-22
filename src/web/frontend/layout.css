@@ -23,7 +23,7 @@ header {
 }
 
 .brand { font-weight: 700; letter-spacing: 0.5px; display: inline-flex; align-items: center; gap: 8px; }
-.brand img { width: 24px; height: 24px; border-radius: 7px; display: block; }
+.brand img { width: 24px; height: 24px; border-radius: var(--radius-ctl); display: block; }
 .brand .sub { font-weight: 400; color: var(--mid); margin-left: 8px; font-size: 12px; }
 
 header .meta {
@@ -75,7 +75,7 @@ header .meta {
 
 
 /* 主区：与 header/tabbar 同一条 16px 边距线——卡片边缘对齐品牌区与导航，
-   不留满幅贴边（贴边时卡片边框被视口裁切，双细线风格直接破相）。 */
+   不留满幅贴边（贴边时圆角面板被视口裁切，圆角直接破相）。 */
 main { padding: 16px; min-width: 0; }
 
 /* 并排卡片用 .cols，避免每个视图各写一套 flex */

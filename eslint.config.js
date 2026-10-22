@@ -15,7 +15,13 @@ const BASE_RULES = {
 };
 
 export default defineConfig([
-  { ignores: ['src/web/public/**', 'node_modules/**'] },
+  {
+    // 只管项目自己的代码。三个都不是：
+    // - src/web/public：vite 构建产物（生成物，不是源码）
+    // - .claude/repo/**：克隆进来的**参考仓库**（gitignore 里的第三方代码，lint 它等于替别人 lint）
+    // - .tool/**：临时工具与对照脚本的产物（放一次性工具的地方，不是项目代码）
+    ignores: ['src/web/public/**', 'node_modules/**', '.claude/repo/**', '.tool/**'],
+  },
   {
     files: ['**/*.{js,mjs,jsx}'],
     languageOptions: {

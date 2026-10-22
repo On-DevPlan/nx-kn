@@ -30,18 +30,27 @@ export default {
       id: 'settings.set',
       cli: ['settings', 'set'],
       http: ['POST', '/api/settings'],
-      summary: '写入设置（k=v 形式，可多个；白名单外的键会被拒绝）',
+      summary: '写入设置（CLI 用 k=v 形式，可多个；面板发 JSON 裸键；白名单外的键会被拒绝）',
       args: [{ name: 'pairs', rest: true, required: false }],
       run: (ctx) => {
+        // 两侧都接：CLI 的 k=v 位置参数（ctx.pairs）与面板 POST 的 JSON 裸键。
+        // 之前只认 pairs——而 view 发的是裸键，于是面板「已保存」的 toast 是假的
+        // （patch 恒为空、service 返回 skipped）。obsidian 域同款修法。
         const patch = {};
-        for (const p of ctx.pairs || []) {
-          const i = String(p).indexOf('=');
-          if (i <= 0) {
-            // 必须抛 NxError：toErrorPayload 只认它 instanceof，非 NxError 上手动赋
-            // `err.code` 会被丢掉、一律归成 INTERNAL（实测 HTTP 会返回 500 而非 400）。
-            throw badInput(`设置项需形如 k=v，收到: ${p}（如: ${APP_NAME_HINT} set theme=dark）`);
+        if (Array.isArray(ctx.pairs) && ctx.pairs.length) {
+          for (const p of ctx.pairs) {
+            const i = String(p).indexOf('=');
+            if (i <= 0) {
+              // 必须抛 NxError：toErrorPayload 只认它 instanceof，非 NxError 上手动赋
+              // `err.code` 会被丢掉、一律归成 INTERNAL（实测 HTTP 会返回 500 而非 400）。
+              throw badInput(`设置项需形如 k=v，收到: ${p}（如: ${APP_NAME_HINT} set theme=dark）`);
+            }
+            patch[String(p).slice(0, i)] = String(p).slice(i + 1);
           }
-          patch[String(p).slice(0, i)] = String(p).slice(i + 1);
+        } else {
+          for (const k of service.SETTING_KEYS) {
+            if (ctx[k] !== undefined) patch[k] = ctx[k];
+          }
         }
         return service.set({ patch });
       },

@@ -1,8 +1,8 @@
-/* 策略：代码块（纸上规范）。白底细框，直角。 */
+/* 策略：代码块（软极简）。白色小圆角芯片浮在浅灰面板上，发丝描边一圈即可。 */
 .snippet-box {
   display: block;
   border: 1px solid var(--soft-2);
-  border-radius: 0;
+  border-radius: var(--radius-ctl);
   background: var(--paper);
   padding: 8px 10px;
   font-family: ui-monospace, Consolas, monospace;

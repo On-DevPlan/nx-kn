@@ -13,9 +13,7 @@ import {
   APP_NAME,
   CRAWL_ENGINES,
   DEFAULT_CRAWL_ENGINE,
-  OBSIDIAN_DEFAULT_CONTENT_DOC,
-  OBSIDIAN_DEFAULT_QUESTIONNAIRE_DOC,
-  OBSIDIAN_DEFAULT_SPEC_DIR,
+  OBSIDIAN_DEFAULT_DOCS,
   sourceDirOf,
   storePathFromEnv,
 } from './paths.js';
@@ -46,9 +44,10 @@ export function initialState() {
     // 这就是「skill 与内容要求解耦」的落点——改规范不用重装 skill。
     obsidian: {
       vault: '', // 绝对路径；空 = 未设定（运行时按 env → kb 兜底链解析）
-      specDir: OBSIDIAN_DEFAULT_SPEC_DIR, // vault 内相对路径
-      contentDoc: OBSIDIAN_DEFAULT_CONTENT_DOC, // 裸文件名
-      questionnaireDoc: OBSIDIAN_DEFAULT_QUESTIONNAIRE_DOC,
+      // 规范文档登记表：key → **相对 vault 根**的路径。
+      // 刻意做成可增删的映射而不是两个固定字段：写作规范会越加越多
+      // （内容风格 / 问卷规范 / 术语表 / frontmatter 规范……），固定字段就得改代码。
+      docs: { ...OBSIDIAN_DEFAULT_DOCS },
     },
   };
 }
@@ -209,17 +208,49 @@ export function normalize(data) {
 //
 // 为什么要专用分支：上面那个通用分支对对象只做浅合并，
 // `obsidian` 若是字符串/数字还会被整个替换掉——这里必须把它拉回固定形状。
+//
+// 迁移（旧 → 新）：
+//   旧：obsidian = { vault, specDir, contentDoc, questionnaireDoc }
+//   新：obsidian = { vault, docs: { <key>: <相对 vault 根的路径> } }
+//
+// 旧形状里「文档在 specDir 下的某个文件名」被折成一条登记项（路径相对 vault 根）。
+// 旧键**不再保留**：留着会让「到底以哪个为准」变成悬而未决的问题（照 kb 的先例）。
+// 迁移是**惰性**的——读命令只改内存，结果随下一次写入落盘。
 export function normalizeObsidian(raw) {
   const src = raw && typeof raw === 'object' ? raw : {};
-  const str = (v, fallback) =>
-    typeof v === 'string' && v.trim() ? v.trim().replace(/\\/g, '/') : fallback;
-  return {
-    // vault 是绝对路径，按用户写的原样存（分隔符交给 resolve 处理）
-    vault: typeof src.vault === 'string' ? src.vault.trim() : '',
-    specDir: str(src.specDir, OBSIDIAN_DEFAULT_SPEC_DIR),
-    contentDoc: str(src.contentDoc, OBSIDIAN_DEFAULT_CONTENT_DOC),
-    questionnaireDoc: str(src.questionnaireDoc, OBSIDIAN_DEFAULT_QUESTIONNAIRE_DOC),
-  };
+  const str = (v) => (typeof v === 'string' && v.trim() ? v.trim().replace(/\\/g, '/') : '');
+
+  // vault 是绝对路径，按用户写的原样存（分隔符交给 resolve 处理）
+  const vault = typeof src.vault === 'string' ? src.vault.trim() : '';
+
+  const docs = {};
+  const hasRegistry = src.docs && typeof src.docs === 'object' && !Array.isArray(src.docs);
+
+  if (hasRegistry) {
+    // 登记表已存在 → 逐项原样保留，**不补默认**。
+    // 否则「注销某一项」会被下次读取悄悄补回来（用户明明删了，工具又给它装上）。
+    for (const [k, v] of Object.entries(src.docs)) {
+      const p = str(v);
+      if (k && p) docs[k] = p;
+    }
+  } else {
+    // 没有登记表 → 首次初始化 / 旧形状迁移，两种都补齐默认登记项。
+    //
+    // 旧形状迁移：specDir + 两个固定文件名 → 两条登记项（路径相对 vault 根）
+    const specDir = str(src.specDir) || 'nx-kn';
+    const joinDoc = (name) => {
+      const doc = str(src[name]);
+      if (!doc) return '';
+      return specDir ? `${specDir}/${doc}` : doc;
+    };
+    const content = joinDoc('contentDoc');
+    const questionnaire = joinDoc('questionnaireDoc');
+    for (const [k, v] of Object.entries(OBSIDIAN_DEFAULT_DOCS)) {
+      docs[k] = (k === 'content' && content) || (k === 'questionnaire' && questionnaire) || v;
+    }
+  }
+
+  return { vault, docs };
 }
 
 // ---- kb 域的结构化归一化 ----

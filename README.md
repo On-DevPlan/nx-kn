@@ -97,11 +97,50 @@ agent 拿到后可以拼出绝对路径去读全文。`--json` 给结构化 `hit
 
 把混乱输入丢给 sk-needdo 即可（见上）。
 
+## 修 Obsidian 双链
+
+给 vault 补全未解析的 `[[双链]]`——**扫描、生成 frontmatter、校验都在 nx-kn 里**
+（原先是 skill 自带的三个 Python 脚本，现在收进命令）：
+
+```bash
+nx-kn obsidian set vault="D:\Obsidian Vault"     # 告诉它你的库在哪
+nx-kn obsidian scan --json                       # 扫出所有未解析双链
+nx-kn obsidian frontmatter --source 日常/foo.md --link "xxx"   # 生成 frontmatter YAML 段
+nx-kn obsidian check --snapshot snap.json        # 写笔记前存快照
+nx-kn obsidian check --snapshot-before snap.json --new-file 日常/新笔记.md   # 写完差分
+```
+
+**项目域提问（项目解读模式）**有一条专门的位置入口——定位 / 首次初始化
+`<vault>/projects/<项目名>/Base-<项目名>.md`，把提问清洗后以 `[[…]]` 追加到根文档末尾
+（幂等），并返回标准 9 步要用的全部定位信息；答案笔记写到它给的 `note.path`，
+**除根文档外不创建任何文档树 / 索引 / 清单**：
+
+```bash
+nx-kn obsidian ask --project <项目根> --question "这是框架是什么"
+nx-kn obsidian ask --project <项目根>            # 不带提问 = 仅初始化根文档
+```
+
+**内容规范不在工具里**——笔记怎么写由你自己在 vault 里维护，登记一条路径即可：
+
+```bash
+nx-kn obsidian set docs.content=nx-kn/base-content.md    # 登记（key 可自定，可登记多条）
+nx-kn obsidian spec                                      # 列清单：key + 路径 + 是否存在
+nx-kn obsidian spec --doc content                        # 直接输出那份规范的全文
+```
+
+配套的 `kn-obsidian-repair-unresolved-links` skill 就是**一份单文件 SOP**（没有 references/、
+没有脚本）：它讲清 9 步流程和每个流程点该调哪条 nx-kn 命令，规范按需从 vault 取。
+
+> 扫未解析双链优先用 `obsidian` 命令行（它与 Obsidian 实际解析最接近），
+> 不可用时自动回退内置解析；输出里的 `via` 字段标明这次用的是哪个。
+> 注意本机 `PATH` 上的 `obsidian` 往往是**图形界面本体**——nx-kn 会识别并跳过它，
+> 免得每次扫描都把 Obsidian 弹起来。
+
 ## 结构
 
 ```
 src/
-├─ core/      基础设施：paths（参数化中心）/ errors / store（JSON 持久化）/ zg（召回引擎驱动）/ web（HTML→markdown 等纯函数）/ watch（文件监听基元）/ open
+├─ core/      基础设施：paths（参数化中心）/ errors / store（JSON 持久化）/ zg（召回引擎驱动）/ web（HTML→markdown 等纯函数）/ watch（文件监听基元）/ obsidian-links（双链解析）/ obsidian-cli（obsidian 命令行驱动）/ open
 ├─ modules/   功能域，各含 index.js（action 声明）+ service.js（业务）+ view.jsx（面板）
 │   ├─ home/       示例域（读路径）
 │   ├─ settings/   示例域（写路径：面板表单 → POST → mutateStore → CLI 同源可读）

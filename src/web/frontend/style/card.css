@@ -1,12 +1,11 @@
-/* 策略：卡片（纸上规范 · 笺）。线说话两次：1.5px 主线围出版框，
-   outline 退 2px 再补一道细线——刻本的书口。直角，无投影。 */
+/* 策略：卡片（软极简）。面板自己是一块浅灰底，一圈线都不用画——
+   原先「1.5px 边框 + outline 退 2px 补一道细线」的双线书口已废：
+   两条线说同一句话，极简风格里一句话只说一次。 */
 .card {
   padding: 0;
-  border: 1.5px solid var(--ink);
-  border-radius: 0;
-  outline: 1px solid var(--ink);
-  outline-offset: 2px;
-  background: var(--paper);
+  border: none;
+  border-radius: var(--radius-card);
+  background: var(--soft);
 }
 .stack > .card + .card { margin-top: 14px; }
 .cols > .card + .card { margin-top: 0; }

@@ -64,9 +64,12 @@ CLI 与 Web 面板共享同一份 action 声明。需要时还能把**文档站�
 | `nx-kn help [topic]` | 帮助；`help --json` 输出可解析命令表 |
 | `nx-kn health` | 自检 |
 | `nx-kn settings get` / `set k=v...` | 读写设置（白名单外的键被拒绝） |
-| `nx-kn obsidian get` | 读 obsidian 配置与解析后的路径（vault 来源、规范目录、文档存在性） |
-| `nx-kn obsidian set k=v...` | 写 obsidian 配置：`vault=<绝对路径>` / `specDir=<vault内相对路径>` / `contentDoc=` / `questionnaireDoc=`（空值=复位；白名单外的键被拒绝） |
-| `nx-kn obsidian spec` | 解析内容规范文档的绝对路径（content / questionnaire 两份）——`kn-obsidian-repair-unresolved-links` skill 运行时第一步跑它 |
+| `nx-kn obsidian get` | 读 obsidian 配置与解析结果（vault 来源、规范文档登记表、文档存在性） |
+| `nx-kn obsidian set k=v...` | 写 obsidian 配置：`vault=<绝对路径>` / `docs.<key>=<相对vault根的路径>`（空值=注销该登记项；白名单外的键被拒绝） |
+| `nx-kn obsidian spec [--doc <key>]` | 不给 `--doc` 列出规范文档登记项；给了 `--doc` **直接输出该文档全文**——skill 靠它拿「内容要求」，不用自己找路径 |
+| `nx-kn obsidian scan` | 扫 vault 里的未解析双链（优先 obsidian 命令行，不可用时回退内置解析；输出里的 `via` 标明实际来源） |
+| `nx-kn obsidian frontmatter --link <文本> [--source <文件>] [--locate] [--project <项目根>]` | 生成新笔记的 frontmatter YAML 段（creatime / tags / bklink），可直接当 Write content 开头；`--project` 把文档绑到某个代码库（项目解读模式） |
+| `nx-kn obsidian check --snapshot <文件>` / `--snapshot-before <文件> --new-file <相对路径>` | 校验新笔记有没有引入新的未解析双链（`passed` 字段是判断依据，不是退出码） |
 | `nx-kn skill install [name] [--to 目录] [--force]` | 把用法装给本机 agent（默认 `~/.claude/skills`；无 [name] 装默认 skill） |
 | `nx-kn skill install --group=<key> [--to 目录] [--force]` | 一键装某个 group（来自 `assets/groups.json`；与 [name] 互斥） |
 | `nx-kn skill list` | 列出可装的 skill + group（含默认 install 标记；`groups.json` 缺失时降级到目录扫描） |
@@ -211,13 +214,13 @@ nx-kn 不再维护混乱输入的「收件箱」域——它已迁到 **nx-sk �
   增量清单是各源目录内的 `.nx-kn-crawl.json`（`url → { file, hash }`）
 - `sources/` 跟着 store 走（同一个数据目录），所以 `NX_KN_STORE` / `--store` 一次搬动全部数据
 - 环境变量 `NX_KN_VAULT` 可临时指定「只看这一个目录」（不落盘、不改列表）
-- obsidian 域配置在 `obsidian{}`：`vault`（绝对路径）/ `specDir`（vault 内相对路径，默认
-  `nx-kn`）/ `contentDoc`（默认 `base-content.md`）/ `questionnaireDoc`（默认 `questionnaire.md`）
-  ——这四项指向的是**内容规范文档**（笔记怎么写），由用户自己在 vault 里维护、可随时改；
-  `kn-obsidian-repair-unresolved-links` skill 运行时用 `nx-kn obsidian spec` 解析它们的位置
-- vault 解析链：`store.obsidian.vault` > 环境变量 `NX_OBSIDIAN_VAULT`（skill 自带的 python
-  脚本也认它）> 第一个含 `.obsidian/` 的 `kb.vaults[]` 登记库 > 未设置。**兜底只在「未设置」
-  时发生**：设了却指错地方会如实报「目录不存在」，不会悄悄换成另一个库
+- obsidian 域配置在 `obsidian{}`：`vault`（绝对路径）/ `docs{}`（**登记表**：key → 相对 vault 根的
+  路径，如 `content` → `nx-kn/base-content.md`）。这些文档是**内容规范**（笔记怎么写），
+  由用户自己在 vault 里维护、可随时改；`kn-obsidian-repair-unresolved-links` skill 运行时用
+  `nx-kn obsidian spec --doc <key>` 取它们的全文——**改规范不用重装 skill**
+- vault 解析链：`--vault` 参数 > `store.obsidian.vault` > 环境变量 `NX_OBSIDIAN_VAULT` >
+  第一个含 `.obsidian/` 的 `kb.vaults[]` 登记库 > 从当前目录沿父目录找 `.obsidian`。
+  **兜底只在「未设置」时发生**：设了却指错地方会如实报「目录不存在」，不会悄悄换成另一个库
 - 环境变量 `NX_KN_CRAWL_DELAY_MS` 改抓取间隔（默认 300ms）
 - 索引落在各库自己的 `<vault>/.zvec-grep/`（zg 拥有；删掉它 = 那个库回到未索引状态）
 - 删除数据 = 删 store.json（无隐藏状态）

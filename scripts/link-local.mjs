@@ -223,7 +223,11 @@ function realNodePath() {
 }
 
 function shimBodyFor(file) {
-  const bin = join(ROOT, 'bin', 'nx-kn.mjs').replace(/\\/g, '/');
+  // bin 入口从 package.json 的 bin 字段取，**不写死**——
+  // 写死过的下场：bin 从 nx-kn.mjs 改名成 kn.mjs 后，全局命令全部指向不存在的文件，
+  // 而且 link 时探测还显示「已指向本仓库」，看起来一切正常（本机踩过）。
+  const binEntry = pkg.bin && (typeof pkg.bin === 'string' ? pkg.bin : pkg.bin[Object.keys(pkg.bin)[0]]);
+  const bin = join(ROOT, binEntry || join('bin', 'kn.mjs')).replace(/\\/g, '/');
   const nodeExe = realNodePath();
   // 回退是必须的：node 升级会换版本目录（…/image/node/24.18.0/node.exe），
   // 写死的路径就失效了。失效时退回 PATH 上的 node —— 至少保持可用（代价是多行
