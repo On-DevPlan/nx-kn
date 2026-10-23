@@ -407,12 +407,17 @@ nx-kn obsidian frontmatter --source {file} --link "{link}" --locate
 | ---------- | -------------------------------------------------------------------------------------------------------- |
 | **两个根** | 项目根 = 代码仓库根（`git rev-parse --show-toplevel`）；vault 根 = `nx-kn obsidian get --json` 的已配置 `vault`（`source=cwd` 是猜测值，先确认再用） |
 | **初始化** | 首次解读先跑 `nx-kn obsidian ask --project <项目根>`（不带提问）：脚本建 `<vault>/projects/<项目名>/Base-<项目名>.md`（frontmatter 带 project 绑定）；**每篇文档只讲一个单项**，层级关系由双链建立（bklink 指父节点），根文档不维护清单 |
-| **提问**   | 项目域提问**一律先跑脚本** `nx-kn obsidian ask --question "<原始提问>" --project <项目根>`：脚本把提问清洗成合法文件名、以 `[[…]]` 追加到根文档**末尾**（重复提问不重复追加），并返回答案笔记位置 `note.path` → 然后走标准 9 步；步骤 6 读到 source 的 `project` 字段 → **必须读源码**作答，引用 `文件:行号` |
+| **提问**   | 项目域提问**一律先跑脚本** `nx-kn obsidian ask --question "<原始提问>" --project <项目根> [--source <出处文档>]`：脚本把提问清洗成合法文件名、以 `[[…]]` 追加到根文档**末尾**（重复提问不重复追加），返回**目标笔记的 frontmatter**（bklink = 根文档 + 问题链接，project 绑定项目根）与答案笔记位置 `note.path` → 照抄 frontmatter 写笔记，然后走标准 9 步；步骤 6 读到 source 的 `project` 字段 → **必须读源码**作答，引用 `文件:行号` |
 
-**位置只由 `ask` 脚本决定，agent 不自行创建位置（硬性）：** 答案笔记写到它返回的 `note.path`；
-步骤 3 的出处用脚本返回的 `base.rel` + `line`，不用再 Grep；除 `Base-<项目名>.md` 外
-**禁止创建任何文档树 / 索引 / MOC / 清单文件**——树只靠 bklink 长出来
-（历史教训：agent 反复冗余地建树建索引，这不是期望行为）。
+**两条关系，一次建立（`ask` 的职责）：** 同一个 `[[问题]]` 链接出现在两处，指向同一篇答案笔记——
+**Base 里那一条**由 `ask` 追加（Base ↔ 目标），**出处文档里那一条**是用户自己写的（出处 ↔ 目标）。
+两处都在是**正常且预期**的，不是重复。`--source` 只是让脚本核对「出处那篇里确实有这个双链」，
+对不上会如实报出来。
+
+**位置与 frontmatter 只由 `ask` 决定，agent 不自行编（硬性）：** 答案笔记写到它返回的 `note.path`，
+frontmatter **照抄它返回的 `note.frontmatter`**（不要自己拼 bklink）；步骤 3 的出处用脚本返回的
+`base.rel` + `line`，不用再 Grep；除 `Base-<项目名>.md` 外**禁止创建任何文档树 / 索引 / MOC / 清单文件**
+——树只靠 bklink 长出来（历史教训：agent 反复冗余地建树建索引，这不是期望行为）。
 细节见 `references/10-project-mode.md`。
 
 ---
@@ -556,7 +561,7 @@ nx-kn skill groups
 | `nx-kn obsidian get --json`                                             | 取 vault 根 + 规范登记项                             |
 | `nx-kn obsidian scan --json`                                            | 扫全库未解析双链（步骤 1 / 9）                       |
 | `nx-kn obsidian frontmatter --source <文件> --link "<文本>" [--locate] [--project <项目根>]` | 生成 frontmatter YAML 段（步骤 4；`--project` 用于项目解读模式） |
-| `nx-kn obsidian ask --question "<原始提问>" [--project <项目根>]`              | **项目域提问唯一入口**：定位 / 初始化 Base、把提问清洗后以 `[[…]]` 追加到根文档末尾（幂等）、返回答案笔记位置与追加行号；不带 `--question` = 仅初始化根文档 |
+| `nx-kn obsidian ask --question "<原始提问>" [--project <项目根>] [--source <出处文档>]` | **项目域提问唯一入口**：定位 / 初始化 Base、把提问清洗后以 `[[…]]` 追加到根文档末尾（幂等）、返回**目标笔记的 frontmatter**（bklink = 根文档 + 问题链接，project 绑定项目根）与答案笔记位置；不带 `--question` = 仅初始化根文档 |
 | `nx-kn obsidian check --snapshot <文件>`                                | 存未解析链接快照（步骤 8 前）                        |
 | `nx-kn obsidian check --snapshot-before <文件> --new-file <相对路径>`   | 差分校验新文件有没有引入新红链（步骤 8）             |
 

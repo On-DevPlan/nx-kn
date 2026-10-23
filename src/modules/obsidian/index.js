@@ -169,13 +169,15 @@ export default {
       cli: ['obsidian', 'ask'],
       http: ['POST', '/api/obsidian/ask'],
       summary:
-        '项目域提问的唯一位置入口：定位/首次初始化 projects/<项目名>/Base-<项目名>.md，把提问清洗后以 [[…]] 追加到根文档末尾（幂等），返回标准 9 步要用的全部定位信息；除根文档外不创建任何树/索引/清单',
+        '项目域提问的位置入口：定位/首次初始化 projects/<项目名>/Base-<项目名>.md，把提问清洗后以 [[…]] 追加到根文档末尾（幂等），并返回目标笔记的 frontmatter（bklink = 根文档 + 问题链接，project 绑定项目根）；除根文档外不创建任何树/索引/清单',
       flags: {
         question: { type: 'string', hint: '原始提问（不带 = 仅初始化根文档，项目解读首次建树用）' },
         project: { type: 'string', hint: '项目根绝对路径（缺省用当前目录）' },
+        source: { type: 'string', hint: '问题出处（vault 内相对路径）——核对那篇文档里确实有这个双链' },
         vault: { type: 'string', hint: 'vault 绝对路径（覆盖配置）' },
       },
-      run: (ctx) => service.ask({ question: ctx.question, project: ctx.project, flagVault: ctx.vault }),
+      run: (ctx) =>
+        service.ask({ question: ctx.question, project: ctx.project, source: ctx.source, flagVault: ctx.vault }),
       render: (r) => {
         if (r.configured === false) {
           return ['vault 未设置', ...(r.hints || []).map((h) => `  ${h}`)].join('\n');
@@ -192,13 +194,22 @@ export default {
           `根文档     ${r.base.rel}${baseState}`,
           askLine,
         ];
+        if (r.source) {
+          out.push(
+            `出处       ${r.source.rel}${r.source.hasLink ? ` 第 ${r.source.line} 行` : '（那里没有这个双链——请核对出处）'}`
+          );
+        }
         if (r.note) out.push(`答案笔记   ${r.note.path}`);
+        for (const rel of r.relations || []) out.push(`关系       ${rel}`);
         out.push(
           '',
           '下一步（按 skill 标准 9 步走，占位全部用上面的值）:',
           `  ${r.next || `${APP_NAME} obsidian frontmatter --source ${r.base.rel} --project ${r.project}`}`,
           '  答案写到上面的「答案笔记」路径；除根文档外不要再创建任何文档树 / 索引 / 清单文件',
         );
+        if (r.note && r.note.frontmatter) {
+          out.push('', '目标笔记的 frontmatter（照抄，不要自己编）:', r.note.frontmatter);
+        }
         return out.join('\n');
       },
     },

@@ -207,3 +207,67 @@ test('ask: 不带提问 = 仅初始化根文档（项目解读首次建树的入
   const text = readFileSync(r.base.abs, 'utf8');
   assert.ok(!text.includes('[['), '纯初始化不写任何双链');
 });
+
+// ---- 机制固化：ask 一次建立「Base ↔ 目标」与「出处文档 ↔ 目标」两条关系 ----
+
+test('ask: 目标笔记的 frontmatter 由脚本给出（bklink = 根文档 + 问题链接，project 绑定项目根）', async () => {
+  tmpData();
+  const vault = fakeVault();
+  await obsidian.set({ patch: { vault } });
+  const project = fakeProject({ 'package.json': '{ "name": "dataweb" }\n' });
+
+  const r = await obsidian.ask({ question: '这是框架是什么', project });
+
+  const fm = r.note.frontmatter;
+  assert.ok(fm.startsWith('---\n'), 'frontmatter 以 --- 起始');
+  assert.match(fm, /creatime: \d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}/);
+  assert.match(fm, /tags: \[\]/);
+  assert.match(fm, /- "\[\[Base-dataweb\]\]"/, 'bklink 第一项是根文档');
+  assert.match(fm, /- "\[\[这是框架是什么\]\]"/, 'bklink 第二项是问题链接');
+  assert.ok(fm.includes(yamlPath(project)), 'project 绑定项目根');
+  assert.ok(fm.trimEnd().endsWith('---'), 'frontmatter 以 --- 收尾');
+});
+
+test('ask: 出处文档里本来就有这个双链 —— 两条关系并存，出处文档不被改动', async () => {
+  tmpData();
+  const vault = fakeVault();
+  await obsidian.set({ patch: { vault } });
+  const project = fakeProject({ 'package.json': '{ "name": "dataweb" }\n' });
+
+  // 用户在自己的笔记里写了 [[问题]]
+  mkdirSync(join(vault, '日常'), { recursive: true });
+  const srcRel = '日常/我的笔记.md';
+  const srcAbs = join(vault, srcRel);
+  writeFileSync(srcAbs, '疑问：[[这是框架是什么]]\n', 'utf8');
+  const before = readFileSync(srcAbs, 'utf8');
+
+  const r = await obsidian.ask({ question: '这是框架是什么', project, source: srcRel });
+
+  assert.equal(r.source.rel, srcRel);
+  assert.equal(r.source.hasLink, true, '出处文档里确实有这个双链');
+  assert.equal(r.source.line, 1);
+  assert.equal(r.appended, true, 'Base 侧仍然追加 —— 两条关系指向同一篇目标笔记');
+  assert.ok(r.relations.some((x) => x.includes('Base ↔ 目标')));
+  assert.ok(r.relations.some((x) => x.includes('出处 ↔ 目标')));
+  assert.equal(readFileSync(srcAbs, 'utf8'), before, '出处文档不得被改动');
+
+  // Base 与出处文档里都能看到同一个链接
+  const baseText = readFileSync(r.base.abs, 'utf8');
+  assert.ok(baseText.includes('[[这是框架是什么]]'), 'Base 里有这个链接');
+});
+
+test('ask: 给的出处里没有这个双链时如实报出来（不替 agent 圆场）', async () => {
+  tmpData();
+  const vault = fakeVault();
+  await obsidian.set({ patch: { vault } });
+  const project = fakeProject();
+
+  mkdirSync(join(vault, '日常'), { recursive: true });
+  writeFileSync(join(vault, '日常', '别的.md'), '与提问无关\n', 'utf8');
+
+  const r = await obsidian.ask({ question: '这是框架是什么', project, source: '日常/别的.md' });
+
+  assert.equal(r.source.hasLink, false);
+  assert.equal(r.source.line, null);
+  assert.ok(r.relations.some((x) => x.includes('请核对出处')));
+});

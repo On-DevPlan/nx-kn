@@ -497,7 +497,7 @@ function projectNameOf(root) {
  * 除根文档外**不创建任何结构文件**——树靠 bklink 长出来，索引类文件一律不建。
  * 不带 `--question` 时只做 1 和 3（项目解读首次建树的入口）。
  */
-export async function ask({ question, project, flagVault } = {}) {
+export async function ask({ question, project, source, flagVault } = {}) {
   const original = pythonTrim(String(question ?? ''));
 
   const { vault, source: vaultSource } = await resolveVault({ flagVault });
@@ -533,6 +533,26 @@ export async function ask({ question, project, flagVault } = {}) {
 
   const base = { rel: baseRel, abs: baseAbs, existed: baseExisted, created: !baseExisted };
 
+  // 目标笔记的 frontmatter：**这是「两条关系」的载体**，由脚本生成、agent 照抄。
+  //
+  //   bklink: [Base-<项目名>, <问题链接>]   ← 根文档（父）+ 问题本身
+  //   project: <项目根>                     ← 文档 ↔ 代码库的绑定
+  //
+  // 「Base ↔ 目标」与「问题 source 文档 ↔ 目标」这两条关系都靠同一个 `[[问题]]` 链接成立：
+  // Base 里那一条由本命令追加；source 文档里那一条是用户自己写的。
+  // 两条都在是**正常且预期**的——不是重复，是两个入口指向同一篇答案笔记。
+  const noteBkl = [`Base-${projectName}`, link].filter(Boolean);
+  const noteFrontmatter = link ? genFrontmatterYaml({ bklink: noteBkl, extra: { project: projectAbs } }) : null;
+
+  // 问题出处（vault 内相对路径）：核对那篇文档里确实有这个双链。
+  // 「出处」是关系的一端，agent 可能给错——如实回报，不猜。
+  let sourceInfo = null;
+  if (source) {
+    const sourceRel = String(source).replace(/\\/g, '/');
+    const hit = findLinkSources(vault, link).find((s) => s.file === sourceRel) || null;
+    sourceInfo = { rel: sourceRel, hasLink: !!hit, line: hit ? hit.line : null };
+  }
+
   if (!hasQuestion) {
     if (!baseExisted) {
       await fsp.mkdir(join(vault, dirRel), { recursive: true });
@@ -546,6 +566,7 @@ export async function ask({ question, project, flagVault } = {}) {
       project: projectAbs,
       projectName,
       base,
+      source: sourceInfo,
       question: null,
       appended: false,
       duplicate: false,
@@ -566,11 +587,17 @@ export async function ask({ question, project, flagVault } = {}) {
       project: projectAbs,
       projectName,
       base,
+      source: sourceInfo,
       question: { original, link, rewritten: link !== original },
       appended: false,
       duplicate: true,
       line: existingLine + 1,
-      note: { dir: dirRel, path: `${dirRel}/${link}.md`, filename: `${link}.md` },
+      note: {
+        dir: dirRel,
+        path: `${dirRel}/${link}.md`,
+        filename: `${link}.md`,
+        frontmatter: noteFrontmatter,
+      },
     };
   }
 
@@ -589,12 +616,24 @@ export async function ask({ question, project, flagVault } = {}) {
     project: projectAbs,
     projectName,
     base,
+    source: sourceInfo,
     question: { original, link, rewritten: link !== original },
     appended: true,
     duplicate: false,
     line,
-    note: { dir: dirRel, path: `${dirRel}/${link}.md`, filename: `${link}.md` },
-    next: `${APP_NAME} obsidian frontmatter --source ${baseRel} --link "${link}" --project ${projectAbs}`,
+    note: {
+      dir: dirRel,
+      path: `${dirRel}/${link}.md`,
+      filename: `${link}.md`,
+      frontmatter: noteFrontmatter,
+    },
+    relations: [
+      `Base ↔ 目标：根文档第 ${line} 行的 [[${link}]]`,
+      sourceInfo
+        ? `出处 ↔ 目标：${sourceInfo.rel}${sourceInfo.hasLink ? ` 第 ${sourceInfo.line} 行` : '（那里没有这个双链，请核对出处）'}`
+        : `出处 ↔ 目标：由 Base 第 ${line} 行的 [[${link}]] 建立`,
+    ],
+    next: `Write ${dirRel}/${link}.md —— 内容 = 返回的 note.frontmatter + 空行 + 正文（不要自己编 frontmatter）`,
   };
 }
 

@@ -118,6 +118,7 @@ nx-kn obsidian check --snapshot-before snap.json --new-file 日常/新笔记.md 
 ```bash
 nx-kn obsidian ask --project <项目根> --question "这是框架是什么"
 nx-kn obsidian ask --project <项目根>            # 不带提问 = 仅初始化根文档
+nx-kn obsidian ask --project <项目根> --question "…" --source "日常/我的笔记.md"   # 核对出处那篇里的双链
 ```
 
 **内容规范不在工具里**——笔记怎么写由你自己在 vault 里维护，登记一条路径即可：
