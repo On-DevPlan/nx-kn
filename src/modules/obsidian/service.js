@@ -667,7 +667,10 @@ export async function ask({ question, project, source, flagVault } = {}) {
         ? `出处 ↔ 目标：${sourceInfo.rel}${sourceInfo.hasLink ? ` 第 ${sourceInfo.line} 行` : '（那里没有这个双链，请核对出处）'}`
         : `出处 ↔ 目标：由 Base 第 ${line} 行的 [[${link}]] 建立`,
     ],
-    next: `Write ${dirRel}/${link}.md —— 内容 = 返回的 note.frontmatter + 空行 + 正文（不要自己编 frontmatter）`,
+    next:
+      `Write ${dirRel}/${link}.md —— 内容 = 返回的 note.frontmatter + 空行 + 正文（frontmatter 照抄，不要自己编）` +
+      `；正文必须是「回答这个问句」的实质内容（读源码 / 读资料后写出来的答案），` +
+      `不是「这条问句是什么」的说明`,
   };
 }
 

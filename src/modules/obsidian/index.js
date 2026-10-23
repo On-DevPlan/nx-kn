@@ -216,6 +216,8 @@ export default {
           '下一步（按 skill 标准 9 步走，占位全部用上面的值）:',
           `  ${r.next || `${APP_NAME} obsidian frontmatter --source ${r.base.rel} --project ${r.project}`}`,
           '  答案写到上面的「答案笔记」路径；除根文档外不要再创建任何文档树 / 索引 / 清单文件',
+          '  正文必须是「回答这个问句」的实质内容（读源码 / 读资料后写出来的答案），',
+          '  不是「这条问句是什么」的说明——后者等于把红链留着、把答案丢掉',
         );
         if (r.note && r.note.frontmatter) {
           out.push('', '目标笔记的 frontmatter（照抄，不要自己编）:', r.note.frontmatter);
