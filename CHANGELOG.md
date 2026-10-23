@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+## [0.4.3] - 2026-10-23
+
 ### Added — 项目域提问的位置入口 `nx-kn obsidian ask`
 
 - 新增 `nx-kn obsidian ask --question "<原始提问>" [--project <项目根>] [--source <出处文档>]`：项目域提问的**唯一位置入口**——定位 / 首次初始化 `<vault>/projects/<项目名>/Base-<项目名>.md`（frontmatter 带 `project` 绑定），把提问清洗成合法文件名后以 `[[…]]` 追加到根文档**末尾**（幂等：重复提问不重复追加），并返回标准 9 步流程要用的全部定位信息（根文档相对路径 / 追加行号 / 答案笔记路径 / 项目根）。
