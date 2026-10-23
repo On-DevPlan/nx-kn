@@ -4,6 +4,17 @@
 
 ## [Unreleased]
 
+### Added — scan / check 的项目范围（多项目并发隔离）
+
+- `nx-kn obsidian scan [--project <项目根>]`：带 `--project` 时**只扫该项目目录**
+  （`vault/projects/<项目名>/`）里的红链——多项目并发时各扫各的，互不越界。
+- `nx-kn obsidian check [... --project <项目根>]`：差分校验同样只算自己项目目录下的红链
+  （快照与差分两次要带同一个 `--project`）。
+- **解析仍对照全库**：链到共享笔记 / 别的项目的笔记不算红链——否则 agent 会跑去重复建一份，
+  那才是真正破坏隔离的地方。
+- 有范围时不走外部 obsidian 命令行（它只能扫全库，没有范围概念）；项目目录还没初始化时
+  如实提示「先跑 obsidian ask 建根文档」，不报错也不静默扫全库。
+
 ## [0.4.3] - 2026-10-23
 
 ### Added — 项目域提问的位置入口 `nx-kn obsidian ask`

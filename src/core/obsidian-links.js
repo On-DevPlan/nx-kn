@@ -353,12 +353,26 @@ export function compareCodePoint(a, b) {
  * - 附件扩展名忽略
  * - 代码围栏与行内代码里的链接不算
  */
-export function scanVaultUnresolved(vault) {
+/**
+ * 扫出 vault 里**未解析**的双链（Python 版 scan_unresolved.py 的移植）。
+ *
+ * `scanRoot` = 扫描范围（相对 vault 根，如 `projects/dataweb`）：
+ * - **哪些文件里的链接会被收集** 只看这个范围（多项目并发时各自只动自己那份）；
+ * - **链接能否解析** 仍对照**全库**索引——否则链到共享笔记 / 别的项目的笔记会被
+ *   误报成红链，agent 就会跑去重复建一份（那才是真正破坏隔离的地方）。
+ *
+ * 返回 `[{ link, sources: [{ file, line }] }]`，按 link 码点序排序。
+ */
+export function scanVaultUnresolved(vault, { scanRoot = '' } = {}) {
   const files = listVaultMarkdown(vault, { skipDir: skipScanDir });
   const index = buildLinkIndex(files);
+  const scope = scanRoot ? scanRoot.replace(/\\/g, '/').replace(/\/+$/, '') : '';
+  const scanFiles = scope
+    ? files.filter((f) => f === scope || f.startsWith(`${scope}/`))
+    : files;
   const unresolved = new Map();
 
-  for (const rel of files) {
+  for (const rel of scanFiles) {
     if (rel.startsWith('ctl/tmpl_')) continue; // 模板占位链接
     const text = readVaultText(join(vault, rel));
     const [selfStem] = splitExt(baseName(rel));

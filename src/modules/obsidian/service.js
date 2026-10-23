@@ -254,7 +254,7 @@ export async function set({ patch = {} } = {}) {
  * 拿不到就回退内置解析——**不因为外部 CLI 不可用而失败**。
  * 输出里的 via 字段标明实际来源，便于排查「两台机器结果不同」。
  */
-export async function scan({ flagVault, out } = {}) {
+export async function scan({ flagVault, out, project } = {}) {
   const { vault, source } = await resolveVault({ flagVault });
   if (!vault) {
     return {
@@ -267,11 +267,16 @@ export async function scan({ flagVault, out } = {}) {
   }
   if (!isDir(vault)) throw notFound(`vault 目录不存在: ${vault}`);
 
+  // 扫描范围：给了 --project 就只看该项目的目录（多项目并发时的隔离边界）。
+  const scope = project ? projectScopeOf(vault, project) : null;
+
   let via = 'builtin';
   let links = null;
   let cliNote;
 
-  if (!cliDisabled()) {
+  // 有范围时不走外部 CLI：它只能扫整个 vault，没有「只看某个项目」的概念，
+  // 用了就会绕过隔离（看到别的项目的红链 → 越界去动别人的笔记）。
+  if (!cliDisabled() && !scope) {
     const probe = await probeObsidianCli();
     if (probe.available) {
       const r = await runObsidianUnresolved(vault);
@@ -286,11 +291,18 @@ export async function scan({ flagVault, out } = {}) {
     }
   }
 
-  if (!links) links = scanVaultUnresolved(vault);
+  if (!links) links = scanVaultUnresolved(vault, { scanRoot: scope ? scope.rel : '' });
 
   if (out) {
     const target = isAbsolute(out) ? out : join(vault, out);
     await fsp.writeFile(target, JSON.stringify(links, null, 2) + '\n', 'utf8');
+  }
+
+  const hints = [];
+  if (scope && !scope.exists) {
+    hints.push(
+      `项目目录还没初始化: ${scope.abs} —— 先跑 ${APP_NAME} obsidian ask --project ${scope.projectAbs} 建根文档`
+    );
   }
 
   return {
@@ -299,9 +311,13 @@ export async function scan({ flagVault, out } = {}) {
     via,
     source,
     vault,
+    ...(scope
+      ? { scope: scope.rel, scopeExists: scope.exists, project: scope.projectAbs, projectName: scope.projectName }
+      : { scope: null }),
     count: links.length,
     links,
     ...(cliNote ? { note: cliNote } : {}),
+    ...(hints.length ? { hints } : {}),
     ...(out ? { out: isAbsolute(out) ? out : join(vault, out) } : {}),
   };
 }
@@ -399,7 +415,7 @@ export async function frontmatter({ link, source, locate, project, flagVault } =
  * diff 是**全库集合差**（after − before），不按新文件过滤——新文件路径只用于文案。
  * 「引入了新的未解析双链」是**业务结果**（passed:false），不是错误。
  */
-export async function check({ snapshot, snapshotBefore, newFile, flagVault } = {}) {
+export async function check({ snapshot, snapshotBefore, newFile, flagVault, project } = {}) {
   const { vault } = await resolveVault({ flagVault });
   if (!vault) {
     return {
@@ -411,7 +427,8 @@ export async function check({ snapshot, snapshotBefore, newFile, flagVault } = {
   }
   if (!isDir(vault)) throw notFound(`vault 目录不存在: ${vault}`);
 
-  const current = await scan({ flagVault });
+  // after-scan 与 scan 同一套范围：只 check 自己项目目录下的红链。
+  const current = await scan({ flagVault, project });
 
   if (snapshot) {
     const target = isAbsolute(snapshot) ? snapshot : join(vault, snapshot);
@@ -470,6 +487,23 @@ export async function check({ snapshot, snapshotBefore, newFile, flagVault } = {
 
 // 项目名推导（项目解读 SOP 的规则）：package.json → Cargo.toml → pyproject.toml → 目录名。
 // scope 前缀（@org/pkg）去掉——vault 路径里不该出现 @。
+// ---- 项目范围（多项目并发时的隔离边界）----
+//
+// 「自己的项目」= vault 里的 projects/<项目名>/ 目录（项目名按 ask 的同一套规则推导）。
+// 扫描与校验都只在这个目录里收集链接——两个项目同时跑，各自动自己那份，互不打扰。
+//
+// 注意**解析仍对照全库**：链到共享笔记 / 别的项目的笔记不算红链，
+// 否则 agent 会跑去重复建一份——那才是真正破坏隔离的地方。
+function projectScopeOf(vault, project) {
+  const projectAbs = resolve(String(project));
+  if (!isDir(projectAbs)) {
+    throw notFound(`项目目录不存在: ${projectAbs}（项目域扫描必须绑定一个真实存在的代码库）`);
+  }
+  const projectName = sanitizeName(projectNameOf(projectAbs));
+  const rel = `projects/${projectName}`;
+  return { projectAbs, projectName, rel, abs: join(vault, rel), exists: isDir(join(vault, rel)) };
+}
+
 function projectNameOf(root) {
   try {
     const pkg = JSON.parse(readVaultText(join(root, 'package.json')));

@@ -108,6 +108,10 @@ nx-kn obsidian get --json
 nx-kn obsidian scan --json
 ```
 
+**项目解读场景加 `--project <项目根>`**——只扫该项目目录（`vault/projects/<项目名>/`），
+多项目并发时各扫各的、互不越界；不带就是全库扫。链接能否解析仍对照全库
+（链到共享笔记不算红链）。
+
 **输出形态**：
 
 ```json
@@ -201,6 +205,10 @@ nx-kn obsidian check --snapshot snapshot.json
 # ... 写新笔记（步骤 6+7） ...
 # 写完后：diff snapshot，识别新文件引入的失败双链
 nx-kn obsidian check --snapshot-before snapshot.json --new-file "日常/动画工程师需要养成哪些直觉.md"
+
+# 项目解读场景：两次都带 --project <项目根>，只 check 自己项目目录下的红链
+nx-kn obsidian check --snapshot snapshot.json --project <项目根>
+nx-kn obsidian check --snapshot-before snapshot.json --new-file "projects/<项目名>/<笔记>.md" --project <项目根>
 ```
 
 输出 `[OK] 新文件 … 未引入新的未解析双链` 或 `[FAIL] … 引入了 N 个未解析双链` + 常见根因诊断。
@@ -407,6 +415,7 @@ nx-kn obsidian frontmatter --source {file} --link "{link}" --locate
 | ---------- | -------------------------------------------------------------------------------------------------------- |
 | **两个根** | 项目根 = 代码仓库根（`git rev-parse --show-toplevel`）；vault 根 = `nx-kn obsidian get --json` 的已配置 `vault`（`source=cwd` 是猜测值，先确认再用） |
 | **初始化** | 首次解读先跑 `nx-kn obsidian ask --project <项目根>`（不带提问）：脚本建 `<vault>/projects/<项目名>/Base-<项目名>.md`（frontmatter 带 project 绑定）；**每篇文档只讲一个单项**，层级关系由双链建立（bklink 指父节点），根文档不维护清单 |
+| **扫描范围** | 项目域的扫描 / 校验都带 `--project <项目根>`：只处理该项目目录下的红链，多项目并发互不越界 |
 | **提问**   | 项目域提问**一律先跑脚本** `nx-kn obsidian ask --question "<原始提问>" --project <项目根> [--source <出处文档>]`：脚本把提问清洗成合法文件名、以 `[[…]]` 追加到根文档**末尾**（重复提问不重复追加），返回**目标笔记的 frontmatter**（bklink = 根文档 + 问题链接，project 绑定项目根）与答案笔记位置 `note.path` → 照抄 frontmatter 写笔记，然后走标准 9 步；步骤 6 读到 source 的 `project` 字段 → **必须读源码**作答，引用 `文件:行号` |
 
 **两条关系，一次建立（`ask` 的职责）：** 同一个 `[[问题]]` 链接出现在两处，指向同一篇答案笔记——
@@ -559,10 +568,10 @@ nx-kn skill groups
 | `nx-kn obsidian spec`                                                   | **列出登记的规范**（key + 路径 + 是否存在）    |
 | `nx-kn obsidian spec --doc <key>`                                       | **取该规范全文**（步骤 0.2 / 步骤 6 / 步骤 8） |
 | `nx-kn obsidian get --json`                                             | 取 vault 根 + 规范登记项                             |
-| `nx-kn obsidian scan --json`                                            | 扫全库未解析双链（步骤 1 / 9）                       |
+| `nx-kn obsidian scan --json [--project <项目根>]`                   | 扫未解析双链；带 `--project` 只扫该项目目录（步骤 1 / 9）|
 | `nx-kn obsidian frontmatter --source <文件> --link "<文本>" [--locate] [--project <项目根>]` | 生成 frontmatter YAML 段（步骤 4；`--project` 用于项目解读模式） |
 | `nx-kn obsidian ask --question "<原始提问>" [--project <项目根>] [--source <出处文档>]` | **项目域提问唯一入口**：定位 / 初始化 Base、把提问清洗后以 `[[…]]` 追加到根文档末尾（幂等）、返回**目标笔记的 frontmatter**（bklink = 根文档 + 问题链接，project 绑定项目根）与答案笔记位置；不带 `--question` = 仅初始化根文档 |
-| `nx-kn obsidian check --snapshot <文件>`                                | 存未解析链接快照（步骤 8 前）                        |
+| `nx-kn obsidian check --snapshot <文件> [--project <项目根>]`      | 存未解析链接快照（步骤 8 前）；带 `--project` 只 check 该项目 |
 | `nx-kn obsidian check --snapshot-before <文件> --new-file <相对路径>`   | 差分校验新文件有没有引入新红链（步骤 8）             |
 
 加 `--json` 得机器可读输出；`--vault <绝对路径>` 可临时覆盖配置的 vault。

@@ -67,9 +67,9 @@ CLI 与 Web 面板共享同一份 action 声明。需要时还能把**文档站�
 | `nx-kn obsidian get` | 读 obsidian 配置与解析结果（vault 来源、规范文档登记表、文档存在性） |
 | `nx-kn obsidian set k=v...` | 写 obsidian 配置：`vault=<绝对路径>` / `docs.<key>=<相对vault根的路径>`（空值=注销该登记项；白名单外的键被拒绝） |
 | `nx-kn obsidian spec [--doc <key>]` | 不给 `--doc` 列出规范文档登记项；给了 `--doc` **直接输出该文档全文**——skill 靠它拿「内容要求」，不用自己找路径 |
-| `nx-kn obsidian scan` | 扫 vault 里的未解析双链（优先 obsidian 命令行，不可用时回退内置解析；输出里的 `via` 标明实际来源） |
+| `nx-kn obsidian scan [--project <项目根>]` | 扫未解析双链（`--project` 只扫该项目目录，多项目并发互不干扰；不带则扫全库；输出里的 `via` 标明实际来源） |
 | `nx-kn obsidian frontmatter --link <文本> [--source <文件>] [--locate] [--project <项目根>]` | 生成新笔记的 frontmatter YAML 段（creatime / tags / bklink），可直接当 Write content 开头；`--project` 把文档绑到某个代码库（项目解读模式） |
-| `nx-kn obsidian check --snapshot <文件>` / `--snapshot-before <文件> --new-file <相对路径>` | 校验新笔记有没有引入新的未解析双链（`passed` 字段是判断依据，不是退出码） |
+| `nx-kn obsidian check --snapshot <文件>` / `--snapshot-before <文件> --new-file <相对路径>` [--project <项目根>] | 校验新笔记有没有引入新的未解析双链（`passed` 字段是判断依据，不是退出码；`--project` 只算该项目目录下的） |
 | `nx-kn skill install [name] [--to 目录] [--force]` | 把用法装给本机 agent（默认 `~/.claude/skills`；无 [name] 装默认 skill） |
 | `nx-kn skill install --group=<key> [--to 目录] [--force]` | 一键装某个 group（来自 `assets/groups.json`；与 [name] 互斥） |
 | `nx-kn skill list` | 列出可装的 skill + group（含默认 install 标记；`groups.json` 缺失时降级到目录扫描） |

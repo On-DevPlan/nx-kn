@@ -75,22 +75,30 @@ export default {
       id: 'obsidian.scan',
       cli: ['obsidian', 'scan'],
       http: ['POST', '/api/obsidian/scan'],
-      summary: '扫 vault 里的未解析双链（优先 obsidian CLI，不可用时回退内置解析）',
+      summary:
+        '扫未解析双链（--project <项目根> 时只扫该项目的目录，多项目并发互不干扰；不带则扫全库）',
       flags: {
+        project: { type: 'string', hint: '只扫这个项目的目录（vault 的 projects/<项目名>/）' },
         vault: { type: 'string', hint: 'vault 绝对路径（覆盖配置）' },
         out: { type: 'string', hint: '把结果写成 JSON 文件（相对 vault 根）' },
       },
-      run: (ctx) => service.scan({ flagVault: ctx.vault, out: ctx.out }),
+      run: (ctx) => service.scan({ flagVault: ctx.vault, out: ctx.out, project: ctx.project }),
       render: (r) => {
         if (r.configured === false) {
           return ['vault 未设置', ...(r.hints || []).map((h) => `  ${h}`)].join('\n');
         }
-        const out = [`vault: ${r.vault}`, `来源: ${r.via === 'cli' ? 'obsidian CLI' : '内置解析'}`, `未解析双链: ${r.count}`];
+        const scopeLine = r.scope ? `范围: ${r.scope}（本项目）` : '范围: 全库';
+        const out = [
+          `vault: ${r.vault}`,
+          `来源: ${r.via === 'cli' ? 'obsidian CLI' : '内置解析'}`,
+          scopeLine,
+          `未解析双链: ${r.count}`,
+        ];
         for (const item of r.links) {
           const where = item.sources.map((s) => `${s.file}:${s.line}`).join(', ');
           out.push(`  [[${item.link}]]  ← ${where}`);
         }
-        if (r.note) out.push(`提示: ${r.note}`);
+        for (const h of r.hints || []) out.push(`提示: ${h}`);
         if (r.out) out.push(`已写出: ${r.out}`);
         return out.join('\n');
       },
@@ -128,11 +136,12 @@ export default {
       cli: [['obsidian', 'check'], ['obsidian', 'postcheck']],
       http: ['POST', '/api/obsidian/check'],
       summary:
-        '校验新笔记有没有引入新的未解析双链（--snapshot 存快照；--snapshot-before + --new-file 做差分）',
+        '校验新笔记有没有引入新的未解析双链（--snapshot 存快照；--snapshot-before + --new-file 做差分；--project 只 check 自己项目目录下的）',
       flags: {
         snapshot: { type: 'string', hint: '把当前未解析链接存到这个文件（相对 vault 根）' },
         'snapshot-before': { type: 'string', hint: '与这个快照文件比对' },
         'new-file': { type: 'string', hint: '刚写完的新文件（相对 vault 根，仅用于文案）' },
+        project: { type: 'string', hint: '只 check 这个项目的目录（vault 的 projects/<项目名>/）' },
         vault: { type: 'string', hint: 'vault 绝对路径（覆盖配置）' },
       },
       run: (ctx) =>
@@ -141,6 +150,7 @@ export default {
           snapshotBefore: ctx['snapshot-before'],
           newFile: ctx['new-file'],
           flagVault: ctx.vault,
+          project: ctx.project,
         }),
       render: (r) => {
         if (r.configured === false) {
