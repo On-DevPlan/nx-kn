@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+## [0.4.4] - 2026-10-23
+
 ### Added — scan / check 的项目范围（多项目并发隔离）
 
 - `nx-kn obsidian scan [--project <项目根>]`：带 `--project` 时**只扫该项目目录**
