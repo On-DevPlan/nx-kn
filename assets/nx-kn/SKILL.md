@@ -67,10 +67,13 @@ CLI 与 Web 面板共享同一份 action 声明。需要时还能把**文档站�
 | `nx-kn obsidian get` | 读 obsidian 配置与解析结果（vault 来源、规范文档登记表、文档存在性） |
 | `nx-kn obsidian set k=v...` | 写 obsidian 配置：`vault=<绝对路径>` / `docs.<key>=<相对vault根的路径>`（空值=注销该登记项；白名单外的键被拒绝） |
 | `nx-kn obsidian spec [--doc <key>]` | 不给 `--doc` 列出规范文档登记项；给了 `--doc` **直接输出该文档全文**——skill 靠它拿「内容要求」，不用自己找路径 |
+| `nx-kn obsidian projects` | 列出 vault 里 `projects/` 下的项目树：每个项目的文档清单（文件名 + H1 标题）、篇数、`Base-<项目名>.md` 是否就位、代码库绑定（读 Base frontmatter 的 `project:`，无根文档/无绑定行都是 null）、未解析链接数、最近更新。只读，**不创建任何文件**（根文档只由 `ask` 建） |
+| `nx-kn obsidian export --name <项目名>[,<名>…] [--out <zip>]` | 把一个或多个项目导出成 zip（`--all` 导出全部，与 `--name` 互斥）。包里是 `manifest.json` + `projects/<名>/…`：项目名 / `project` 绑定 / 逐文件 sha256；**不含 zg 索引**（它绑死绝对路径与 embedding 维度）。`--out` 是「写到哪」：给了就落盘（相对路径按当前工作目录解析）；**CLI 不给就落在当前目录**，名字 `kn-<项目\|all>-<时间戳>.zip`，命令会打出完整路径（同名已存在时加 `-2` 后缀，不覆盖既有包）；**面板里留空 = 包直接回给浏览器下载**（同一个命名规则） |
+| `nx-kn obsidian import --file <zip> [--force] [--dry-run] [--project-path <绝对路径>]` | 从 zip 导入项目到当前 vault。以 manifest 为准逐文件校验 sha256，包内多余条目忽略；同名项目**默认拒绝**，`--force` 覆盖并先整目录备份到数据目录 `backup/`；`--project-path` 只改写 Base 的 `project:` 绑定（换机器迁移用，目录必须存在）；`--dry-run` 只规划不写盘。校验全部通过才动盘，导入后索引要重建（`kb index`）。面板支持**拖拽 zip**：浏览器只交得出字节拿不到路径，路由层把它落成临时文件后走同一条导入逻辑，请求结束即删；回显的是原始文件名，不是临时路径 |
 | `nx-kn obsidian read --file <相对路径> [--from N] [--to N]` | 读一篇 vault 笔记的内容（与 scan 同一条解码链，GBK/BOM 免乱码；行区间 1 起含端点，行号可直接用于「文件:行号」引用；越界/非整数报错不 clamp） |
-| `nx-kn obsidian scan [--project <项目根>]` | 扫未解析双链（`--project` 只扫该项目目录，多项目并发互不干扰；不带则扫全库；输出里的 `via` 标明实际来源） |
+| `nx-kn obsidian scan [--project <项目根>] [--project-name <目录名>]` | 扫未解析双链（`--project` 只扫该项目目录，多项目并发互不干扰；不带则扫全库；输出里的 `via` 标明实际来源）。项目名三级解析：`--project-name` → 已有 `Base-*.md` 的 `project:` 绑定 → package.json/Cargo.toml/pyproject.toml/目录名推导，输出 `projectNameSource` 标明来源 |
 | `nx-kn obsidian frontmatter --link <文本> [--source <文件>] [--locate] [--spec <key>[,<key>…]] [--project <项目根>]` | 生成新笔记的 frontmatter YAML 段（creatime / tags / bklink，传 `--spec` 再多一段 `spec:` 规范文档链接），可直接当 Write content 开头；`--spec` 的 key 须先 `obsidian set docs.<key>=<相对路径>` 登记，未登记/文件缺失报错；`--project` 把文档绑到某个代码库（项目解读模式） |
-| `nx-kn obsidian check --snapshot <文件>` / `--snapshot-before <文件> --new-file <相对路径>` [--project <项目根>] | 校验新笔记有没有引入新的未解析双链（`passed` 字段是判断依据，不是退出码；`--project` 只算该项目目录下的） |
+| `nx-kn obsidian check --snapshot <文件>` / `--snapshot-before <文件> --new-file <相对路径>` [--project <项目根>] [--project-name <目录名>] | 校验新笔记有没有引入新的未解析双链（`passed` 字段是判断依据，不是退出码；`--project` 只算该项目目录下的；`--project-name` 与 scan 用同一个名字） |
 | `nx-kn skill install [name] [--to 目录] [--force]` | 把用法装给本机 agent（默认 `~/.claude/skills`；无 [name] 装默认 skill） |
 | `nx-kn skill install --group=<key> [--to 目录] [--force]` | 一键装某个 group（来自 `assets/groups.json`；与 [name] 互斥） |
 | `nx-kn skill list` | 列出可装的 skill + group（含默认 install 标记；`groups.json` 缺失时降级到目录扫描） |

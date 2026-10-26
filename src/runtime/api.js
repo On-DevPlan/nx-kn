@@ -2,6 +2,18 @@
 //
 // 这里没有手写路由 —— 每条路由都来自某个模块的 action 声明，
 // 所以「面板上有按钮、CLI 里没命令」在结构上不可能发生。
+//
+// 传文件（下载 zip / 拖拽上传 zip）也走这条规则，只是多两个**显式**能力开关，
+// 由 action 自己声明，不靠 content-type 猜：
+//   - `httpFile: true`      响应可能是文件：run 返回 `{ download: { buffer, filename } }` 时
+//                           直接写字节流（否则照旧 JSON）。
+//   - `httpUpload: { maxBytes }` 请求体是原始字节（浏览器拿不到本地路径，只能交内容）：
+//                           落成临时文件 → ctx.file = 该路径 → run 结束即删。
+//                           于是导入逻辑只有一份（认路径），上传只是「怎么把字节变成路径」。
+import { randomBytes } from 'node:crypto';
+import { tmpdir } from 'node:os';
+import { basename, join } from 'node:path';
+import fsp from 'node:fs/promises';
 import { ACTIONS } from './registry.js';
 import { compileRoute, applySpec } from './spec.js';
 import { toErrorPayload, httpStatusOf, CODES, badInput } from '../core/errors/index.js';
@@ -51,6 +63,72 @@ export function sendJson(res, status, obj) {
     'cache-control': 'no-store',
   });
   res.end(JSON.stringify(obj));
+}
+
+// 下载文件名可能含中文（项目名就是中文的）：
+//   filename=       给老客户端看的 ASCII 兜底（非 ASCII 一律换成 _）
+//   filename*=      按 RFC 5987 给真名，浏览器优先用它
+// 只写 filename= 会把中文变成乱码或直接丢掉扩展名。
+function contentDisposition(filename) {
+  const name = String(filename || 'download.bin');
+  const ascii = name.replace(/[^\x20-\x7e]/g, '_').replace(/["\\]/g, '');
+  return `attachment; filename="${ascii}"; filename*=UTF-8''${encodeURIComponent(name)}`;
+}
+
+function sendDownload(res, { buffer, filename, contentType }) {
+  const buf = Buffer.isBuffer(buffer) ? buffer : Buffer.from(buffer);
+  res.writeHead(200, {
+    'content-type': contentType || 'application/octet-stream',
+    'content-length': String(buf.length),
+    'content-disposition': contentDisposition(filename),
+    'cache-control': 'no-store',
+  });
+  res.end(buf);
+}
+
+const DEFAULT_UPLOAD_MAX = 256 * 1024 * 1024;
+
+function fmtBytes(n) {
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+  return `${(n / 1024 / 1024).toFixed(1)} MB`;
+}
+
+// 把上传的字节落成临时文件，返回 { file, uploadName }。
+// 先量 content-length：明显超限的请求不必真的读进内存再报错。
+async function readUpload(req, action, tmpFiles) {
+  const max = Number(action.httpUpload && action.httpUpload.maxBytes) || DEFAULT_UPLOAD_MAX;
+  const declared = Number(req.headers['content-length']);
+  if (Number.isFinite(declared) && declared > max) {
+    throw badInput(`上传文件过大：${fmtBytes(declared)}（上限 ${fmtBytes(max)}）`);
+  }
+
+  const chunks = [];
+  let size = 0;
+  for await (const c of req) {
+    size += c.length;
+    if (size > max) throw badInput(`上传文件过大：超过上限 ${fmtBytes(max)}`);
+    chunks.push(c);
+  }
+  const buf = Buffer.concat(chunks);
+  if (!buf.length) throw badInput('上传的文件是空的');
+
+  const file = join(tmpdir(), `kn-upload-${Date.now()}-${randomBytes(4).toString('hex')}.zip`);
+  await fsp.writeFile(file, buf);
+  tmpFiles.push(file);
+
+  // 原始文件名只用于**显示**（结果里回显的是它，而不是机器上看不见的临时路径）。
+  // 过一遍 basename：有的客户端会把整个路径塞进来。
+  const rawName = req.headers['x-kn-filename'];
+  let uploadName;
+  if (rawName) {
+    try {
+      uploadName = basename(decodeURIComponent(String(rawName)));
+    } catch {
+      uploadName = basename(String(rawName));
+    }
+  }
+  return { file, uploadName };
 }
 
 async function readBody(req) {
@@ -112,14 +190,29 @@ export async function handleApi(req, res, url) {
       route.keys.forEach((k, i) => {
         raw[k] = decodeURIComponent(m[i + 1]);
       });
-      if (method === 'GET' || method === 'HEAD') {
-        for (const [k, v] of url.searchParams) raw[k] = v;
-      } else {
-        // 解析失败要冒出去（400），不能降级成空 body —— 见 readBody 的注释。
-        Object.assign(raw, await readBody(req));
+      // 上传落下的临时文件：run 跑完（无论成败）就删，绝不留到下一轮
+      const tmpFiles = [];
+      try {
+        const ctype = String(req.headers['content-type'] || '').toLowerCase();
+        if (method === 'GET' || method === 'HEAD') {
+          for (const [k, v] of url.searchParams) raw[k] = v;
+        } else if (action.httpUpload && ctype && !ctype.includes('application/json')) {
+          // 原始字节上传：body 是文件本身，其余参数只能走 query string。
+          for (const [k, v] of url.searchParams) raw[k] = v;
+          Object.assign(raw, await readUpload(req, action, tmpFiles));
+        } else {
+          // 解析失败要冒出去（400），不能降级成空 body —— 见 readBody 的注释。
+          Object.assign(raw, await readBody(req));
+        }
+        const data = await action.run(applySpec(action, raw), { transport: 'http' });
+        if (action.httpFile && data && data.download) {
+          sendDownload(res, data.download);
+        } else {
+          sendJson(res, 200, { ok: true, data });
+        }
+      } finally {
+        for (const f of tmpFiles) await fsp.unlink(f).catch(() => {});
       }
-      const data = await action.run(applySpec(action, raw), { transport: 'http' });
-      sendJson(res, 200, { ok: true, data });
     } catch (err) {
       // 错误码 → HTTP 状态只在这一处映射（core/errors/index.js 提供表）
       const p = toErrorPayload(err);

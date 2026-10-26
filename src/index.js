@@ -14,6 +14,10 @@ export * as obsidian from './modules/obsidian/service.js';
 // 库用方想复用「抓一个页面并清洗」时不必自己重写一遍。
 export * as web from './core/web.js';
 
+// zip 编解码同理：只支持 store/deflate 的极小子集，但带 zip-slip 与解压上限防护，
+// 库用方要打/解自己的知识包时可以直接复用这套安全边界。
+export * as zip from './core/zip.js';
+
 // Skill Seekers 的进程驱动（候选命令解析 + spawn + 可用性探测）同样导出：
 // 库用方要自己编排这个外部引擎时，不必重新踩一遍「URL 里的 % 不能过 shell」这些坑。
 export * as skillSeekers from './core/skill-seekers.js';

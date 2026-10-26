@@ -23,6 +23,18 @@ const ROOT_CAUSES = [
   '目标文件在另一个目录但双链用了 basename（应改 [[path/file]] 或确保同目录唯一 basename）',
 ];
 
+// 项目名的三个来源（service.resolveProjectName 的 source 取值）→ 给人看的说法。
+// 输出里必须带来源：项目名同时是目录名、根文档名和 bklink 目标，一旦推错就是
+// 整批笔记集体变红链，而「这名字怎么来的」是事后唯一的线索。
+const NAME_SOURCE_LABEL = {
+  flag: '显式给定',
+  binding: '沿用已有根文档绑定',
+  derived: '自动推导',
+};
+
+const PROJECT_NAME_HINT =
+  'vault 里的项目目录名（缺省：先查已有 Base 绑定，再按 package.json → Cargo.toml → pyproject.toml → 目录名 推导；名字一旦定下不要改，改了该项目的 bklink 会集体变红链）';
+
 export default {
   id: 'obsidian',
   title: 'Obsidian',
@@ -72,6 +84,38 @@ export default {
       },
     },
     {
+      id: 'obsidian.projects',
+      cli: ['obsidian', 'projects'],
+      http: ['GET', '/api/obsidian/projects'],
+      summary:
+        '列出 vault 里 projects/ 下的项目树（每个项目的文档清单、根文档是否就位、未解析链接数；只读，不创建任何文件）',
+      flags: {
+        vault: { type: 'string', hint: 'vault 绝对路径（覆盖配置）' },
+      },
+      run: (ctx) => service.projects({ flagVault: ctx.vault }),
+      render: (r) => {
+        if (r.configured === false) {
+          return ['vault 未设置', ...(r.hints || []).map((h) => `  ${h}`)].join('\n');
+        }
+        if (!r.count) {
+          return [`vault: ${r.vault}`, '项目: 0', ...(r.hints || []).map((h) => `提示: ${h}`)].join('\n');
+        }
+        const out = [`vault: ${r.vault}`, `项目: ${r.count}（${r.root}/）`];
+        for (const p of r.projects) {
+          const base = p.base ? p.base.split('/').pop() : '(缺)';
+          out.push('');
+          out.push(
+            `[${p.name}]  ${p.docs} 篇 md · 根文档 ${base} · 未解析 ${p.unresolved} · 更新 ${p.updatedAt || '-'}`
+          );
+          // 绑定是「这个项目对应哪个代码库」。没有根文档 = 没地方记绑定，就不占一行。
+          if (p.projectPath) out.push(`  绑定 ${p.projectPath}`);
+          for (const d of p.documents) out.push(`  - ${d.file}    ${d.title}`);
+        }
+        for (const h of r.hints || []) out.push(`提示: ${h}`);
+        return out.join('\n');
+      },
+    },
+    {
       id: 'obsidian.read',
       cli: ['obsidian', 'read'],
       http: ['GET', '/api/obsidian/read'],
@@ -102,15 +146,26 @@ export default {
         '扫未解析双链（--project <项目根> 时只扫该项目的目录，多项目并发互不干扰；不带则扫全库）',
       flags: {
         project: { type: 'string', hint: '只扫这个项目的目录（vault 的 projects/<项目名>/）' },
+        'project-name': { type: 'string', hint: PROJECT_NAME_HINT },
         vault: { type: 'string', hint: 'vault 绝对路径（覆盖配置）' },
         out: { type: 'string', hint: '把结果写成 JSON 文件（相对 vault 根）' },
       },
-      run: (ctx) => service.scan({ flagVault: ctx.vault, out: ctx.out, project: ctx.project }),
+      run: (ctx) =>
+        service.scan({
+          flagVault: ctx.vault,
+          out: ctx.out,
+          project: ctx.project,
+          projectName: ctx['project-name'],
+        }),
       render: (r) => {
         if (r.configured === false) {
           return ['vault 未设置', ...(r.hints || []).map((h) => `  ${h}`)].join('\n');
         }
-        const scopeLine = r.scope ? `范围: ${r.scope}（本项目）` : '范围: 全库';
+        const scopeLine = r.scope
+          ? `范围: ${r.scope}（本项目 · 名字来源: ${
+              NAME_SOURCE_LABEL[r.projectNameSource] || r.projectNameSource || '未知'
+            }）`
+          : '范围: 全库';
         const out = [
           `vault: ${r.vault}`,
           `来源: ${r.via === 'cli' ? 'obsidian CLI' : '内置解析'}`,
@@ -167,6 +222,7 @@ export default {
         'snapshot-before': { type: 'string', hint: '与这个快照文件比对' },
         'new-file': { type: 'string', hint: '刚写完的新文件（相对 vault 根，仅用于文案）' },
         project: { type: 'string', hint: '只 check 这个项目的目录（vault 的 projects/<项目名>/）' },
+        'project-name': { type: 'string', hint: PROJECT_NAME_HINT },
         vault: { type: 'string', hint: 'vault 绝对路径（覆盖配置）' },
       },
       run: (ctx) =>
@@ -176,6 +232,7 @@ export default {
           newFile: ctx['new-file'],
           flagVault: ctx.vault,
           project: ctx.project,
+          projectName: ctx['project-name'],
         }),
       render: (r) => {
         if (r.configured === false) {
@@ -208,11 +265,18 @@ export default {
       flags: {
         question: { type: 'string', hint: '原始提问（不带 = 仅初始化根文档，项目解读首次建树用）' },
         project: { type: 'string', hint: '项目根绝对路径（缺省用当前目录）' },
+        'project-name': { type: 'string', hint: PROJECT_NAME_HINT },
         source: { type: 'string', hint: '问题出处（vault 内相对路径）——核对那篇文档里确实有这个双链' },
         vault: { type: 'string', hint: 'vault 绝对路径（覆盖配置）' },
       },
       run: (ctx) =>
-        service.ask({ question: ctx.question, project: ctx.project, source: ctx.source, flagVault: ctx.vault }),
+        service.ask({
+          question: ctx.question,
+          project: ctx.project,
+          projectName: ctx['project-name'],
+          source: ctx.source,
+          flagVault: ctx.vault,
+        }),
       render: (r) => {
         if (r.configured === false) {
           return ['vault 未设置', ...(r.hints || []).map((h) => `  ${h}`)].join('\n');
@@ -225,7 +289,9 @@ export default {
             : `提问       [[${r.question.link}]]  ← 已在第 ${r.line} 行（重复提问，未重复追加）`;
         const out = [
           `vault      ${r.vault}`,
-          `项目       ${r.projectName}（${r.project}）`,
+          `项目       ${r.projectName}（${r.project}） · 名字来源: ${
+            NAME_SOURCE_LABEL[r.projectNameSource] || r.projectNameSource || '未知'
+          }`,
           `根文档     ${r.base.rel}${baseState}`,
           askLine,
         ];
@@ -250,8 +316,114 @@ export default {
         return out.join('\n');
       },
     },
+    {
+      id: 'obsidian.export',
+      cli: ['obsidian', 'export'],
+      http: ['POST', '/api/obsidian/export'],
+      // 不给 --out 时 HTTP 侧直接回 zip 字节（面板按钮 = 浏览器下载）。
+      httpFile: true,
+      summary:
+        '把一个或多个项目导出成 zip（含 manifest.json：项目名 / project 绑定 / 逐文件 sha256；不含 .zvec-grep 索引——它绑死绝对路径与 embedding 维度，换机器必然失效）',
+      flags: {
+        name: { type: 'string', hint: '要导出的项目名（逗号分隔；名字 = vault 里 projects/ 下的目录名）' },
+        all: { type: 'boolean', hint: '导出 projects/ 下全部项目（与 --name 互斥）' },
+        out: {
+          type: 'string',
+          hint: '输出 zip 路径（绝对路径，或相对当前工作目录）；不填 = 当前目录下 kn-<项目>-<时间戳>.zip（面板里留空 = 浏览器下载）',
+        },
+        vault: { type: 'string', hint: 'vault 绝对路径（覆盖配置）' },
+      },
+      run: (ctx, info) =>
+        service.exportProjects({
+          names: ctx.name,
+          all: ctx.all,
+          out: ctx.out,
+          flagVault: ctx.vault,
+          transport: info && info.transport,
+        }),
+      render: (r) => {
+        if (r.configured === false) {
+          return ['vault 未设置', ...(r.hints || []).map((h) => `  ${h}`)].join('\n');
+        }
+        const out = [
+          `导出 ${r.projects.length} 个项目 / ${r.fileCount} 个文件 / 原文 ${fmtBytes(r.fileBytes)} → 包 ${fmtBytes(r.bytes)}`,
+          // 下载模式下没有落盘路径，也不能有；CLI 留空则落在当前目录，必须把路径打出来
+          r.out
+            ? `包体: ${r.out}${r.defaultedOut ? '（未指定 --out，已落在当前目录）' : ''}`
+            : `包体: ${r.filename}（由 HTTP 回给浏览器下载）`,
+        ];
+        for (const p of r.projects) {
+          out.push(`  [${p.name}] ${p.files} 文件 · ${fmtBytes(p.bytes)} · project: ${p.projectPath || '（未绑定）'}`);
+        }
+        for (const s of r.skipped || []) out.push(`跳过: ${s.path}（${s.reason}）`);
+        if (r.next) out.push('', `下一步: ${r.next}`);
+        return out.join('\n');
+      },
+    },
+    {
+      id: 'obsidian.import',
+      cli: ['obsidian', 'import'],
+      http: ['POST', '/api/obsidian/import'],
+      // 面板拖拽：浏览器只能交字节（拿不到本地路径），路由层把它落成临时文件再交给 run，
+      // 于是导入逻辑只有一份（认路径），上传只解决「怎么把字节变成路径」。
+      httpUpload: { maxBytes: 256 * 1024 * 1024 },
+      summary:
+        '从 zip 导入项目（以 manifest 为准逐文件校验 sha256；同名项目默认拒绝，--force 覆盖并先整目录备份；--project-path 改写 project 绑定；--dry-run 只规划不写盘）',
+      flags: {
+        file: { type: 'string', required: true, hint: '要导入的 zip 路径（面板拖拽时由上传自动填入）' },
+        force: { type: 'boolean', hint: '覆盖同名项目（覆盖前把旧目录整份备份到数据目录的 backup/）' },
+        'dry-run': { type: 'boolean', hint: '只校验与规划，不写入任何文件' },
+        'project-path': { type: 'string', hint: '把 Base 里的 project 绑定改写成这个代码库绝对路径（换机器迁移时用）' },
+        vault: { type: 'string', hint: 'vault 绝对路径（覆盖配置）' },
+      },
+      run: (ctx) =>
+        service.importProjects({
+          file: ctx.file,
+          uploadName: ctx.uploadName,
+          force: ctx.force,
+          dryRun: ctx['dry-run'],
+          projectPath: ctx['project-path'],
+          flagVault: ctx.vault,
+        }),
+      render: (r) => {
+        if (r.configured === false) {
+          return ['vault 未设置', ...(r.hints || []).map((h) => `  ${h}`)].join('\n');
+        }
+        if (r.dryRun) {
+          const out = [`[DRY-RUN] 目标 vault: ${r.vault}`, `包: ${r.file}`, `将导入 ${r.wouldImport.length} 个项目:`];
+          for (const p of r.wouldImport) {
+            out.push(
+              `  [${p.name}] ${p.files} 文件 · ${fmtBytes(p.bytes)}` +
+                `${p.conflict ? ' · 已存在（需 --force）' : ''}` +
+                ` · project: ${p.projectPath || '（未绑定）'}${p.projectPathExists === false ? '（本机不存在）' : ''}`
+            );
+          }
+          for (const x of r.ignored || []) out.push(`忽略（manifest 未列）: ${x}`);
+          out.push('', r.note || '');
+          return out.join('\n');
+        }
+        const out = [`已导入 ${r.imported.length} 个项目 → ${r.vault}`];
+        for (const p of r.imported) {
+          out.push(
+            `  [${p.name}] ${p.dir}/ · ${p.files} 文件` +
+              ` · project: ${p.projectPath || '（未绑定）'}${p.projectPathRewritten ? '（已改写）' : ''}`
+          );
+        }
+        if (r.backup) out.push(`备份（被覆盖的旧目录）: ${r.backup}`);
+        for (const x of r.ignored || []) out.push(`忽略（manifest 未列）: ${x}`);
+        out.push('', `下一步: ${r.next}`);
+        return out.join('\n');
+      },
+    },
   ],
 };
+
+function fmtBytes(n) {
+  if (!Number.isFinite(n)) return '-';
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+  return `${(n / 1024 / 1024).toFixed(2)} MB`;
+}
 
 // CLI 的 k=v 与 HTTP 的裸键汇成同一个 patch。
 function patchOf(ctx) {

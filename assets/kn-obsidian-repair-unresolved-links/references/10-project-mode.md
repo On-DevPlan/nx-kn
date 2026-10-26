@@ -46,8 +46,20 @@
 
 ### 1. 项目名、目录与根文档
 
-项目名按顺序确定：package.json 的 `name` → Cargo.toml / pyproject.toml 的项目名 → 仓库目录名；
-再把它收拾成适合文件名的 `<项目名>`（去掉路径非法字符与 scope 前缀）。
+项目名按**三级**确定，顺序不可换：
+
+| 优先级 | 来源 | 说明 |
+| --- | --- | --- |
+| 1 | `--project-name <名字>` | **推荐**。目录名是给人看的阅读目录名，不该被 npm 包名绑架（包名可能带 scope、可能留着产品线早期的版本号） |
+| 2 | 已有根文档的绑定 | `projects/<名>/Base-<名>.md` 的 `project:` 等于本项目绝对路径时沿用该名字 |
+| 3 | 自动推导 | package.json 的 `name` → Cargo.toml / pyproject.toml 的项目名 → 仓库目录名（去非法字符与 scope 前缀） |
+
+**名字一旦定下就不要改**：它同时决定目录、根文档文件名、以及每篇笔记 `bklink` 里的
+`[[Base-<名>]]`。改名一次，该项目的全部笔记会在一瞬间集体变红链。
+
+显式名字必须**原样可用**：含路径分隔符、或会被清洗（如 `*`）时直接报错，脚本不替人改写；
+名字已被另一个项目绑定也直接报错，不覆盖别人的树。目录存在但没有根文档（早期手写笔记）
+则允许接管——那是给无主笔记补项目身份的唯一路径。
 
 项目知识树固定初始化到：
 
@@ -58,7 +70,7 @@
 `Base-<项目名>.md` 是这棵知识树的**根节点**。它的**定位与创建只走脚本**：
 
 ```bash
-nx-kn obsidian ask --project <项目根>        # 不带 --question：仅定位 / 初始化根文档
+nx-kn obsidian ask --project <项目根> --project-name <目录名>   # 不带 --question：仅定位 / 初始化根文档
 ```
 
 - **不存在** → 脚本创建目录与根文档，frontmatter（含 `project: "<项目根>"` 绑定）由脚本生成，
@@ -100,7 +112,7 @@ nx-kn obsidian ask --project <项目根>        # 不带 --question：仅定位 
 **第一步永远是同一条脚本**，位置与 frontmatter 只由它决定：
 
 ```bash
-nx-kn obsidian ask --question "<原始提问>" --project <项目根绝对路径> [--source <出处文档的 vault 内相对路径>]
+nx-kn obsidian ask --question "<原始提问>" --project <项目根绝对路径> [--project-name <目录名>] [--source <出处文档的 vault 内相对路径>]
 ```
 
 脚本做且只做四件事：
@@ -173,23 +185,76 @@ project: "D:\\code\\a_sh_cmd_utils\\proj\\dataWeb"
 一个 vault 里可以并存多个项目的笔记树（`vault/projects/<项目名>/`）。**每个项目只该动自己那份**——
 否则两个项目同时跑，各自会去修对方项目里的红链，笔记越改越乱。
 
-项目域的**扫描与校验都要带 `--project <项目根>`**：
+先看有哪些项目（只读枚举，不建任何文件）：
 
 ```bash
-nx-kn obsidian scan --json --project <项目根>                          # 只扫本项目的红链
-nx-kn obsidian check --snapshot snap.json --project <项目根>             # 快照
+nx-kn obsidian projects          # 每个项目：篇数 / 根文档是否就位 / 代码库绑定(project:) / 未解析链接数 / 文档清单
+nx-kn obsidian projects --json   # 机读
+```
+
+`Base-<项目名>.md` 显示「缺」时**不要自己补**——建根文档的唯一入口是下面的
+`ask --project`，这样 frontmatter 的 `project` 绑定不会两处写歪。
+
+项目域的**扫描与校验都要带 `--project <项目根>`**；建议同时带 `--project-name <目录名>`，
+三条命令用**同一个**名字——各自推导一次就可能算出三个不同目录：
+
+```bash
+nx-kn obsidian scan --json --project <项目根> --project-name <目录名>                 # 只扫本项目的红链
+nx-kn obsidian check --snapshot snap.json --project <项目根> --project-name <目录名>   # 快照
 nx-kn obsidian check --snapshot-before snap.json \
-    --new-file "projects/<项目名>/<笔记>.md" --project <项目根>          # 差分
+    --new-file "projects/<项目名>/<笔记>.md" --project <项目根> --project-name <目录名>  # 差分
 ```
 
 - **哪些文件里的链接会被收集**：只看 `vault/projects/<项目名>/`。
 - **链接能否解析**：仍对照**全库**——链到共享笔记 / 别的项目的笔记不算红链，
   否则 agent 会跑去重复建一份（那才是真正破坏隔离的地方）。
-- 快照与差分**两次要带同一个 `--project`**，否则范围不一致，差分没有意义。
-- 项目目录还没初始化时，命令会如实提示「先跑 `nx-kn obsidian ask --project …` 建根文档」——
-  不报错，也不静默扫全库。
+- 快照与差分**两次要带同一个 `--project` 与 `--project-name`**，否则范围不一致，差分没有意义。
+- 项目目录还没初始化时，命令会如实提示「先跑 `nx-kn obsidian ask --project … --project-name …` 建根文档」——
+  提示里的名字就是它当时算出来的那个，直接复制即可，不报错、也不静默扫全库。
 
 不带 `--project` 就是全库扫（修整个 vault 的红链时用）。
+
+---
+
+## 迁移：导出 / 导入 zip
+
+项目树可以整包搬走（换机器、备份、给同事）。包是普通 zip，里面只有
+`manifest.json` 和 `projects/<名>/…`——**没有索引、没有配置、没有本机路径**（路径只作为信息记在 manifest 里）：
+
+```bash
+# 源机器：导出一个或多个项目
+nx-kn obsidian export --name sedoc-fe-8.60 --out D:\backup\sedoc.zip
+nx-kn obsidian export --name a,b --out D:\backup\two.zip
+nx-kn obsidian export --all --out D:\backup\all.zip
+
+# 不写 --out 也行：包落在**当前目录**，名字是 kn-<项目|all>-<时间戳>.zip，命令会打出完整路径
+nx-kn obsidian export --name sedoc-fe-8.60
+
+# 目标机器：先预演，再导入
+nx-kn obsidian import --file D:\backup\sedoc.zip --dry-run
+nx-kn obsidian import --file D:\backup\sedoc.zip
+```
+
+面板里这两步不用敲命令：**「导出到」留空 = 包直接回给浏览器下载**
+（下载名服务端定：`kn-<项目>-<时间戳>.zip`）；导入直接**把 zip 拖进投放区**——
+浏览器只交得出字节拿不到本地路径，路由层把它落成临时文件后走同一条导入逻辑
+（请求结束即删，回显的是原始文件名）。
+
+要点：
+
+- **manifest 是唯一权威**：导入以它列出的文件为准，逐条校验 sha256；包里多出来的条目
+  忽略并列进 `ignored`——不认识的字节绝不落盘。
+- **同名项目默认拒绝**（不合并、不自动改名）。确认覆盖加 `--force`，覆盖前把旧目录
+  **整份备份**到数据目录的 `backup/import-<时间戳>/`；覆盖 = 替换，包里没有的旧文件不会残留
+  （否则会留下「看起来能解析」的陈旧笔记）。
+- **`project:` 绑定默认原样保留**。换机器后原路径通常不存在，导入会在 `projectPathExists`
+  里如实标出来；要改就显式给 `--project-path <新的代码库绝对路径>`（该目录必须存在），
+  只改 `Base-<名>.md` 的那一行，其他笔记一个字节不动。
+- **索引不在包里**，也不该在：`.zvec-grep` 绑死绝对路径与 embedding 模型维度。导入后跑
+  `nx-kn kb index`（换过模型用 `--rebuild`）。
+- 校验是**先全部跑完再动盘**的：缺文件 / 哈希不符 / 路径非法，任何一项不合格就一个文件都不写。
+- 迁移后先跑 `nx-kn obsidian projects` 确认篇数与根文档就位，再跑
+  `nx-kn obsidian scan --project <项目根> --project-name <名>` 确认红链为 0。
 
 ---
 
@@ -198,6 +263,7 @@ nx-kn obsidian check --snapshot-before snap.json \
 | 坑                                                  | 后果                                                 | 正确做法                                                                 |
 | --------------------------------------------------- | ---------------------------------------------------- | ------------------------------------------------------------------------ |
 | 把项目根当 vault 根                                 | 文档写进代码仓库里，或扫错库                         | vault 只认 `nx-kn obsidian get --json` 的答案                          |
+| **项目名直接吃 package.json 的 name**             | 目录名与人的认知错位（`sedoc-fe-1.0` vs `sedoc-fe-8.60`），根文档一建就与已有笔记的 bklink 全错开 | 用 `--project-name` 显式给「给人看的目录名」；名字定下后不要改         |
 | 每篇文档的 `project` 写成不同路径                 | 提问时找不到对应源码                                 | 全树用**同一个**项目根绝对路径                                     |
 | **agent 自行决定位置、建树 / 索引 / 清单**    | vault 里长出重复的结构文件，位置漂移，用户明确不期望 | 位置只由 `nx-kn obsidian ask` 的返回值决定；除 Base 外不建任何结构文件 |
 | **自己拼 frontmatter（bklink 少一项或写错）** | 答案笔记与树失联，回链断裂                           | 照抄 `note.frontmatter`：bklink = 根文档 + 问题链接，project = 项目根  |
