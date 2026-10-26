@@ -255,6 +255,79 @@ export class ErrorBoundary extends Component {
   }
 }
 
+// ---- 抽屉：右侧滑出 ----
+//
+// 为什么不用 Modal 装这些内容：项目详情 / 导出 / 导入都是「一边看表格一边操作」的场景，
+// 居中弹窗会把背后的列表整块盖住，用户失去上下文（「我刚点的是哪一行」）。
+// 抽屉只占右侧 480px，列表仍在视野里。
+//
+// 三个行为是必需的，不是装饰：
+//   - Esc 关闭：键盘用户不该被迫去找 ×
+//   - 点遮罩关闭：这是浮层的通用预期
+//   - 关闭时 inert + visibility:hidden：只是 translateX(100%) 的话，
+//     元素仍在可达性树与 Tab 序列里，键盘能「聚焦到屏幕外」
+//
+// 不用条件渲染（{open && <aside/>}）是为了保留进出场过渡——挂载/卸载会跳过动画。
+export function Drawer({ open, title, sub, onClose, onBack, footer, children }) {
+  const boxRef = useRef(null);
+  const lastFocus = useRef(null);
+
+  useEffect(() => {
+    const onKey = (e) => { if (e.key === 'Escape') onClose(); };
+    if (open) document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [open, onClose]);
+
+  // 焦点进抽屉、关闭时还给原来的位置：否则关掉抽屉后焦点停在 body，
+  // 键盘用户要从头 Tab 一遍才能回到刚才那一行。
+  useEffect(() => {
+    if (open) {
+      lastFocus.current = document.activeElement;
+      const t = setTimeout(() => {
+        const el = boxRef.current && boxRef.current.querySelector('[data-autofocus], .btn.primary, button, input');
+        if (el) el.focus();
+      }, 190); // 等过渡结束再聚焦，避免页面被「平滑滚动」带偏
+      return () => clearTimeout(t);
+    }
+    if (lastFocus.current && typeof lastFocus.current.focus === 'function') {
+      lastFocus.current.focus();
+      lastFocus.current = null;
+    }
+    return undefined;
+  }, [open]);
+
+  return (
+    <>
+      <div className={'scrim' + (open ? ' on' : '')} onClick={onClose} aria-hidden="true" />
+      <aside
+        ref={boxRef}
+        className={'drawer' + (open ? ' on' : '')}
+        role="dialog"
+        aria-modal="true"
+        aria-label={typeof title === 'string' ? title : '详情'}
+        inert={open ? undefined : ''}
+      >
+        <div className="dhead">
+          {onBack ? (
+            <button className="dback" onClick={onBack} aria-label="返回" title="返回">
+              ←
+            </button>
+          ) : null}
+          <div className="dhead-main">
+            <h2>{title}</h2>
+            {sub ? <div className="dsub">{sub}</div> : null}
+          </div>
+          <button className="dclose" onClick={onClose} aria-label="关闭">
+            ×
+          </button>
+        </div>
+        <div className="dbody">{children}</div>
+        {footer ? <div className="dfoot">{footer}</div> : null}
+      </aside>
+    </>
+  );
+}
+
 // ---- 弹窗：大块内容（diff / 冲突详情 / 命令输出） ----
 
 export function Modal({ title, onClose, children }) {

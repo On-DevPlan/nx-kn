@@ -80,3 +80,109 @@ main { padding: 16px; min-width: 0; }
 
 /* 并排卡片用 .cols，避免每个视图各写一套 flex */
 .cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 14px; align-items: start; }
+
+/* ============================================================
+   页头（页内标题 + 元信息 + 只读信号）
+   ============================================================
+   不用卡片包住：它是「这一页是什么」的说明，不是一块内容。
+   卡片一包，页面第一屏就变成「盒子里装标题」，视觉重量给错了对象。 */
+.pagehead { display: flex; align-items: flex-start; gap: 16px; padding: 2px 0 12px; }
+.pagehead-main { min-width: 0; }
+.pagehead h1 { margin: 0; font-size: 18px; font-weight: 700; letter-spacing: 0.2px; }
+.phmeta { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 4px; color: var(--mid); font-size: 11px; }
+.phmeta .path { font-family: ui-monospace, Consolas, monospace; color: var(--ink); }
+.phmeta .sep { width: 1px; height: 11px; background: var(--soft-2); }
+.phright { margin-left: auto; display: flex; align-items: center; gap: 6px; padding-top: 2px; }
+
+/* 工具条：筛选 chips 左、搜索与操作右。底部那条线把它和表格连成一体
+   （工具条是「作用于下面这张表」的，不是独立一块）。 */
+.toolbar.bar { padding: 10px 0; border-top: var(--border); margin-top: 2px; }
+.toolbar .grow { flex: 1; }
+.toolbar .search { width: 190px; flex: none; }
+
+/* ============================================================
+   项目表（obsidian 项目总览）
+   ============================================================
+   与 style.css 的 .levels 不同：那是「几行键值」，这是一屏看全部项目并批量操作的表，
+   因此需要 sticky 表头（项目多时滚着核对）、整行可点、行内快捷操作。
+   圆角给到 th/tbody 末行，**不能**给容器 overflow:hidden ——
+   那会让容器成为 sticky 的滚动容器，表头被粘到「容器内 top」处压住首行（原型阶段实测）。 */
+.ptable { border: var(--border); border-radius: var(--radius-card); }
+.ptable table { width: 100%; border-collapse: separate; border-spacing: 0; table-layout: fixed; font-size: var(--fs-core); }
+
+/* top 值 = header 实高（44px tab + 1px 边线）。改 header 高度必须同步这里，
+   否则滚动时表头上方留一条缝，表格内容从缝里透出来。 */
+.ptable thead th {
+  position: sticky;
+  top: 45px;
+  z-index: 2;
+  height: 30px;
+  padding: 0 12px;
+  background: var(--soft);
+  color: var(--mid);
+  font-weight: 500;
+  font-size: 11px;
+  text-align: left;
+  white-space: nowrap;
+  border-bottom: var(--border);
+}
+.ptable thead th:first-child { border-top-left-radius: calc(var(--radius-card) - 1px); }
+.ptable thead th:last-child { border-top-right-radius: calc(var(--radius-card) - 1px); }
+.ptable tbody tr:last-child td:first-child { border-bottom-left-radius: calc(var(--radius-card) - 1px); }
+.ptable tbody tr:last-child td:last-child { border-bottom-right-radius: calc(var(--radius-card) - 1px); }
+
+/* 列宽按比例给（不是只让项目列 auto）：table-layout:fixed 下只给一列 auto 时，
+   全部余量都进那一列——宽屏上会出现「左边一大片、右边挤成一坨」。
+   比例合计 ≈100% 时，各视口下的列宽关系稳定。 */
+.ptable thead th.c-chk { width: 38px; }
+.ptable thead th.c-name { width: 42%; }
+.ptable thead th.c-docs { width: 7%; }
+.ptable thead th.c-un { width: 8%; }
+.ptable thead th.c-base { width: 10%; }
+.ptable thead th.c-at { width: 18%; }
+.ptable thead th.c-act { width: 12%; }
+.ptable th.sortable { cursor: pointer; user-select: none; }
+.ptable th.sortable:hover { color: var(--ink); }
+.ptable th .ar { display: inline-block; width: 9px; margin-left: 3px; font-size: 9px; visibility: hidden; }
+.ptable th.on { color: var(--ink); }
+.ptable th.on .ar { visibility: visible; }
+
+/* 行高 44px 而不是 28px：项目名与绑定路径是**两行**。
+   28px 装两行会把第二行压到相邻行上（.row 的同类坑，见 row.css 的 .row.wrap）。 */
+.ptable tbody tr { background: var(--paper); cursor: pointer; }
+.ptable tbody tr:hover { background: var(--soft); }
+.ptable tbody tr.on { background: var(--soft); }
+.ptable tbody td { height: 44px; padding: 0 12px; border-bottom: 1px solid var(--soft-2); vertical-align: middle; }
+.ptable tbody tr:last-child td { border-bottom: 0; }
+.ptable tbody tr.empty-row { cursor: default; }
+.ptable tbody tr.empty-row:hover { background: var(--paper); }
+
+.ptable .pname { display: block; font-weight: 600; font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ptable .pbind { display: block; margin-top: 1px; color: var(--mid); font-size: 11px; font-family: ui-monospace, Consolas, monospace; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* 数字列与时间列右对齐。`thead th` 的 text-align:left 特异性更高（.ptable thead th = 0,2,1），
+   所以不能只写 `.ptable .num`——必须显式压到 th 上，否则表头左、数字右，看着像错位。 */
+.ptable .num { text-align: right; font-variant-numeric: tabular-nums; }
+.ptable thead th.num,
+.ptable thead th.c-at { text-align: right; }
+.ptable .un { color: var(--bad); font-weight: 600; font-variant-numeric: tabular-nums; }
+.ptable td.c-at { text-align: right; }
+
+/* 行内快捷操作：hover / 键盘聚焦才出现。常驻会把每一行都画成工具条，
+   而这张表的主操作是「点行看详情」，不是逐行点按钮。 */
+.ptable .ract { display: flex; gap: 2px; justify-content: flex-end; opacity: 0; transition: opacity 0.1s; }
+.ptable tbody tr:hover .ract,
+.ptable tbody tr:focus-within .ract { opacity: 1; }
+
+.ptable-foot { display: flex; align-items: center; gap: 10px; padding: 6px 12px; border-top: var(--border); color: var(--mid); font-size: 11px; }
+.ptable-foot b { color: var(--ink); font-weight: 600; font-variant-numeric: tabular-nums; }
+.ptable-foot .grow { flex: 1; }
+
+/* 窄屏：把「根文档」「最近更新」两列让出去——宁可少两列信息，
+   也不让项目名被挤成 3 个字（表格在手机宽度下最该保住的是身份列）。 */
+@media (max-width: 720px) {
+  .ptable thead th.c-base, .ptable tbody td.c-base,
+  .ptable thead th.c-at, .ptable tbody td.c-at { display: none; }
+  .ptable thead th.c-name { width: auto; }
+  .phright { width: 100%; margin-left: 0; padding-top: 6px; }
+  .pagehead { flex-wrap: wrap; }
+}

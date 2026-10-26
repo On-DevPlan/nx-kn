@@ -61,6 +61,20 @@ input:focus, select:focus { outline: none; box-shadow: var(--shadow-relief-inset
 /* placeholder 同理：不写就是 UA 的 #757575（4.6:1，压线）。 */
 input::placeholder { color: var(--mid); }
 
+/* 复选框/单选框不吃上面那套「28px 高 + 描边 + 内边距」——它们由 UA 画，
+   套上去会被拉成 28px 的方块、还多一圈方框。尺寸交回 UA，只统一强调色（跟着墨色走）。 */
+input[type='checkbox'], input[type='radio'] {
+  width: 14px;
+  height: 14px;
+  flex: none;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  accent-color: var(--ink);
+  cursor: pointer;
+}
+
 /* --- 表单行三件套 ---
    .opt-row / .opt-label / .opt-actions 是骨架 settings 视图与各模块面板共用的类名，
    但 templates/server-cli-web 只写了类名、没有任何 CSS 定义（nx-kn 生成后实测：
@@ -71,9 +85,33 @@ input::placeholder { color: var(--mid); }
 .opt-label { width: 80px; flex-shrink: 0; color: var(--mid); font-size: 11px; }
 .opt-actions { display: flex; gap: 8px; padding: 8px 12px; }
 
+/* --- 拖放区（文件上传的可见形态）---
+   元素是 <label>：点它 = 选文件，拖进来 = 接文件，两者走同一个回调。
+   虚线是「可投放」的通用约定（不用彩色底：面板只有 --bad 一个语义色），
+   拖到上面时描边变墨色，不新增任何颜色。 */
+.dropzone {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  margin: 8px 12px 0;
+  padding: 12px;
+  border: 1px dashed var(--soft-2);
+  border-radius: var(--radius-ctl);
+  background: var(--paper);
+  color: var(--mid);
+  font-size: 12px;
+  text-align: center;
+  cursor: pointer;
+}
+.dropzone:hover { border-color: var(--mid); }
+.dropzone.over { border-color: var(--ink); color: var(--ink); }
+
 /* --- 空态 --- */
 .empty { color: var(--mid); padding: 18px 12px; }
-.empty code { background: var(--soft-2); padding: 1px 6px; border-radius: 6px; }
+/* 空态里的 code 是「要照着敲的东西」，不是注脚：--mid 压在 --soft-2 底上只有 4.32:1
+   （CDP 实测，低于正文 4.5），改用 --ink。 */
+.empty code { background: var(--soft-2); color: var(--ink); padding: 1px 6px; border-radius: 6px; }
 
 /* --- 转圈（数据未到达时的占位）---
    组件是 components/ui.jsx 的 <Spinner>。环用 --soft-2 打底、缺口用 --mid，

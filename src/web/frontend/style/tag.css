@@ -13,3 +13,44 @@
 }
 .tag.strong { background: #e8ede5; border-color: #7d8f76; color: #4f5c49; }
 .tag.bad { background: var(--paper); border-color: var(--bad); color: var(--bad); }
+
+/* ---- 筛选 chip 与信号 pill ----
+   与 .tag 同一形状家族（胶囊），区别在语义：
+   - .chip 可点，是「当前筛选」；选中态走实心墨——状态该一眼看出来，不是装饰。
+   - .sig 只读，报一件事的数量；.bad 只给「需要你动手的」，健康态用灰、不刷存在感。 */
+.chip {
+  display: inline-flex;
+  align-items: center;
+  height: 24px;
+  padding: 0 10px;
+  border: 1px solid var(--soft-2);
+  border-radius: var(--radius-pill);
+  background: var(--paper);
+  color: var(--mid);
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.chip:hover { color: var(--ink); border-color: var(--mid); }
+.chip.on { background: var(--ink); border-color: var(--ink); color: var(--paper); }
+.chip .c { margin-left: 4px; opacity: 0.72; font-variant-numeric: tabular-nums; }
+.chip.on .c { opacity: 0.8; }
+
+.sig {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 22px;
+  padding: 0 9px;
+  border: 1px solid var(--soft-2);
+  border-radius: var(--radius-pill);
+  background: var(--paper);
+  color: var(--mid);
+  font: inherit;
+  font-size: 11px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.sig .n { font-weight: 600; font-variant-numeric: tabular-nums; }
+.sig.bad { border-color: var(--bad); color: var(--bad); }

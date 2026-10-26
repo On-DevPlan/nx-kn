@@ -41,3 +41,66 @@
 }
 .modal-title { display: flex; align-items: center; justify-content: space-between; padding: 12px 16px; border-bottom: 1px solid var(--soft-2); font-weight: 700; font-size: 12px; }
 .modal-body { padding: 16px; overflow: auto; font-size: 12px; }
+
+/* ---- 抽屉（右侧滑出）----
+   与 .dlg/.modal 同一族（浮层），所以共用遮罩色与阴影；层级低一档：
+   抽屉背后还得看得见列表，将来若在抽屉上开确认框，弹窗才该在上面。
+   宽度 480px 是内容决定的（键值几行 + 一列文档名），再宽只是多留白。
+   关闭态用 visibility:hidden 而不是只 translateX：否则键盘仍能 Tab 进「屏幕外」。 */
+.scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  background: rgba(20, 22, 26, 0.24);
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity 0.16s ease, visibility 0s linear 0.16s;
+}
+.scrim.on {
+  opacity: 1;
+  visibility: visible;
+  transition: opacity 0.16s ease, visibility 0s;
+}
+
+.drawer {
+  position: fixed;
+  top: 0;
+  right: 0;
+  height: 100%;
+  width: min(480px, 100vw);
+  z-index: 41;
+  display: flex;
+  flex-direction: column;
+  background: var(--paper);
+  border-left: var(--border);
+  box-shadow: var(--shadow-float);
+  transform: translateX(100%);
+  visibility: hidden;
+  transition: transform 0.18s ease, visibility 0s linear 0.18s;
+}
+.drawer.on {
+  transform: none;
+  visibility: visible;
+  transition: transform 0.18s ease, visibility 0s;
+}
+
+.dhead { display: flex; align-items: flex-start; gap: 10px; padding: 14px 16px 12px; border-bottom: var(--border); }
+.dhead-main { flex: 1; min-width: 0; }
+.dhead h2 { margin: 0; font-size: 14px; font-weight: 700; letter-spacing: 0.2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dsub { color: var(--mid); font-size: 11px; margin-top: 2px; line-height: 1.5; }
+.dback, .dclose { border: 0; background: none; color: var(--mid); cursor: pointer; line-height: 1; font: inherit; padding: 0; }
+.dback { font-size: 15px; margin-top: 2px; }
+.dclose { font-size: 18px; padding: 0 2px; }
+.dback:hover, .dclose:hover { color: var(--ink); }
+.dbody { flex: 1; overflow: auto; padding: 14px 16px 20px; }
+.dfoot { display: flex; align-items: center; gap: 8px; padding: 11px 16px; border-top: var(--border); background: var(--paper); }
+.dfoot .grow { margin-left: auto; }
+.dfoot .hint { color: var(--mid); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* 抽屉内的拖放区不再吃「卡片内边距」那套外边距（.dropzone 默认 margin: 8px 12px 0） */
+.dbody .dropzone { margin: 0; }
+
+/* 抽屉里的小节标题：11px 灰字，做分组而不做装饰（不加大字号、不加下划线） */
+.dsect { color: var(--mid); font-size: 11px; font-weight: 500; margin: 0 0 6px; }
+.dsect + .dsect { margin-top: 16px; }
+/* .dsect 与 .bad 同特异性且本文件后加载，不补这条「失败标题」会静默变成灰色 */
+.dsect.bad { color: var(--bad); }

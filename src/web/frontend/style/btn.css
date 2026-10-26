@@ -21,6 +21,29 @@
 .btn.ghost { border-color: transparent; background: transparent; }
 .btn.ghost:hover { background: var(--soft-2); }
 .btn.small { height: 22px; padding: 0 10px; font-size: 11px; }
+/* 主操作：一枚实心墨钮。同屏只许一个（推进流程的那个），
+   两枚实心钮 = 没有主次。禁用态回到纸面（实心灰底会把「按不了」说成「已按下」）。 */
+.btn.primary { background: var(--ink); border-color: var(--ink); color: var(--paper); }
+.btn.primary:hover { background: #2a2d33; border-color: #2a2d33; }
+.btn.primary:active:not(:disabled) { background: var(--ink); color: var(--paper); border-color: var(--ink); }
+.btn.primary:disabled { background: var(--paper); border-color: var(--soft-2); color: var(--mid); }
 .btn.danger { border-color: var(--bad); color: var(--bad); background: var(--paper); }
 .btn.danger:hover { background: var(--paper); }
 .btn.danger:active:not(:disabled) { background: var(--bad); color: #fff; border-color: var(--bad); }
+
+/* 图标按钮（行内快捷操作）：平时不占视觉重量，hover 才显形。
+   24px 见方而不是 28px —— 它嵌在 44px 高的表格行里，与文字基线的关系比尺寸更重要。 */
+.iconb {
+  width: 24px;
+  height: 24px;
+  display: grid;
+  place-items: center;
+  border: 0;
+  background: none;
+  border-radius: var(--radius-ctl);
+  color: var(--mid);
+  cursor: pointer;
+  padding: 0;
+}
+.iconb:hover { color: var(--ink); background: var(--soft-2); }
+.iconb:focus-visible { color: var(--ink); }
