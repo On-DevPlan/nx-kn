@@ -40,6 +40,10 @@
 - `Remove-Item` 会静默失败 → 用 `[System.IO.File]::Delete()`，删完必须独立列举复核。
 - IDE/会话注入 HTTP 代理，但本地模型下载与 npm 安装实测未被掐。
 - 后台起服务用 `node bin/kn.mjs serve --no-open`；`Start-Process pnpm`（.cmd shim）拉不起来。
+- **serve 不热载后端**：改 `src/` 后端代码必须重启 serve；前端改完 `vite build` 即生效
+  （静态文件读磁盘）。面板主视图 = 表格 + 右侧 Drawer（`ui.jsx` 的 `<Drawer>`，
+  四态：详情/导出/导入/设置），样式分层：浮层进 `dlg.css`、按钮族进 `btn.css`、
+  表格与页头进 `layout.css`（版式层，允许项目自由改）。
 
 ## 面板视觉与可读性约定
 
@@ -57,6 +61,14 @@
   只有 JSX 引用、无 CSS 定义（已在 `style.css` 补上）。
 - 单行行（`.row`）固定 28px 高；放多行内容（代码片段等）必须用 `.row.wrap` 变体，
   否则 `overflow: visible` 会把内容压到相邻行上叠字。
+- **`--ok` 这个 token 不存在**（面板只有 `--bad` 一个语义色）：写 `var(--ok, #2a7)` 会永远落
+  fallback 硬编码绿（--soft 底上 2.74:1，CDP 实测）——成功态标记用 `.muted`。`.empty code`
+  在 --soft-2 底上要用 `--ink`（--mid 只有 4.32:1）。checkbox 是 base 层特例：
+  `input[type=checkbox/radio]` 要显式摘掉全局 28px/描边（14px + accent-color: var(--ink)）。
+- **sticky 表头不能放进 `overflow:hidden` 的圆角容器**：overflow 容器是 sticky 的滚动容器，
+  表头会被粘到「容器内 top:N px」处、页面没滚动就压住首行（thead 布局位 177、th 实渲染 221，
+  正好 +44）。圆角要给到 th 首尾 / tbody 末行，wrapper 不加 overflow:hidden。
+  排序的 tie-break 不能跟着升降序翻：同值永远按名字升序，否则并列行切方向时莫名换序。
 - 面板状态卡：**`st === null` 是「还不知道」，不是「没有」**。`/api/kb/status` 冷启动
   要 5–6.5s，期间必须显示 `…`，不能渲「未设定 / zg 未安装 / 未建」。
 
@@ -92,6 +104,39 @@
   `health` 会**真的读一次** store。
 - 采集陈旧产物清理：只清「上次 manifest 记录过、本次未产出」的 `.md`，且只在 `produced > 0` 时清理。
   **坑**：`next` 是从上次 manifest 继承的，拿它当保留集合 = 什么都没删。
+
+## obsidian 项目名：三级解析（A2，2026-10-26 落地）
+
+- 项目名同时决定 `projects/<名>/`、`Base-<名>.md`、以及每篇笔记 bklink 里的 `[[Base-<名>]]`。
+  **它一变，整批笔记在同一秒集体变红链** → 解析顺序是硬约定，不可换：
+  `--project-name` 显式 → 已有 `Base-*.md` 的 `project:` 绑定反查 → package.json/Cargo.toml/pyproject.toml/目录名。
+- 目录名是「给人看的阅读目录名」，不许被 npm 包名绑架：sedoc 仓库 `package.json name` = `sedoc-fe-1.0`，
+  vault 目录 = `sedoc-fe-8.60`。直接推导会造出平行目录，并把 28 篇的 bklink 全变红。
+- 显式名字**不静默 sanitize**（含 `/` `\` 或会被清洗就 `badInput`）；目录已被另一个项目绑定就报错；
+  目录存在但无 Base = 无主笔记，允许接管（补项目身份的唯一路径）。
+- 返回值必须带 `projectNameSource`（`flag`/`binding`/`derived`）并展示——「这名字怎么来的」是事后唯一线索。
+- `check` 必须把 `projectName` **透传**给 `scan`：三个入口各自推导一次就会算出三个目录名。
+
+## 知识库迁移：obsidian export / import（2026-10-26）
+
+- 包 = `manifest.json` + `projects/<名>/…`；manifest 是**唯一权威**（逐文件 sha256，多余条目忽略）。
+  **索引不进包**：`.zvec-grep` 绑死绝对路径与 embedding 维度，导入后必须 `kb index` 重建。
+- `src/core/zip.js` 是零依赖的最小 zip（store/deflate 子集），同时是**安全边界**：
+  zip-slip（`..` / 绝对路径 / 盘符）、单文件 64MB、总量 512MB、逐条 CRC；ZIP64 / 加密 / 分卷 / 未知方法报错。
+- 覆盖语义 = **替换**（先 rm 再写），并在 `dataDirFromEnv()/backup/import-<ts>/` 留整目录备份；
+  同名默认**整体拒绝**，不做部分导入；`--dry-run` 不被冲突拦住（预演就是要先看见冲突）。
+- `--project-path` 只改 Base 的 `project:` 一行（索引拼接，不用 `String.replace`）；
+  默认保留原值并如实报 `projectPathExists`。
+- CLI flag 名就是声明里的 key：写 `names` 只认 `--names`（`--name` 报「未知参数」）。
+- `--out` 不是必填，**按通道决定去处的默认值**：HTTP（面板留空）= 回字节给浏览器下载；
+  CLI 留空 = 落在**当前工作目录**（`kn-<项目|all>-<ts>.zip`，同名加 `-2` 不覆盖），
+  并回 `defaultedOut` 让输出打出绝对路径。**别再改回「CLI 缺 --out 就报错」**——
+  人只想导个包，却被迫先想好路径再敲一遍。
+- 面板：导出留空 = 下载；导入支持**拖拽**（`httpUpload` 落临时文件→走同一套认路径的导入逻辑，
+  请求结束即删；回显原始文件名）。传输层两个开关 `httpFile` / `httpUpload` 由 action 显式声明，
+  不靠 content-type 猜。
+- 验收迁移的正确姿势：**三方比对**（源 == 包内 == 导入后）；只比「源 vs 目标」会把
+  「导出后源文件又被改」误判成丢字节。
 
 ## 测试约定
 
