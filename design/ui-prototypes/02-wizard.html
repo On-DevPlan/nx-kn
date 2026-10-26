@@ -1,0 +1,355 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>原型 B · 向导（三步走）</title>
+<style>
+  *{box-sizing:border-box}
+  body{
+    margin:0;background:#fff;color:#14161a;
+    font:12px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei",sans-serif;
+  }
+  code,.mono{font-family:ui-monospace,Consolas,"Cascadia Mono",monospace}
+  header{
+    position:sticky;top:0;z-index:5;display:flex;align-items:center;gap:12px;
+    height:44px;padding:0 16px;background:#fff;border-bottom:1px solid #ebedf0;
+  }
+  .brand{font-weight:700;letter-spacing:.5px;display:flex;align-items:center;gap:8px}
+  .logo{width:22px;height:22px;border-radius:6px;background:#14161a;color:#fff;display:grid;place-items:center;font-size:11px}
+  .brand .sub{font-weight:400;color:#6a6f76;font-size:12px}
+  nav{display:flex;gap:2px}
+  .tab{border:0;background:none;min-height:44px;padding:0 12px;color:#6a6f76;font-size:13px;cursor:pointer}
+  .tab.active{color:#14161a;font-weight:600;box-shadow:inset 0 -2px 0 #14161a}
+  .meta{margin-left:auto;color:#6a6f76}
+
+  main{max-width:880px;margin:0 auto;padding:22px 16px 64px}
+
+  /* 模式分段 */
+  .seg{display:inline-flex;padding:3px;background:#f5f6f7;border-radius:10px;gap:3px}
+  .seg button{
+    border:0;background:none;height:28px;padding:0 16px;border-radius:8px;
+    font-size:12px;color:#6a6f76;cursor:pointer;
+  }
+  .seg button.on{background:#fff;color:#14161a;font-weight:600;box-shadow:0 0 0 1px #ebedf0}
+  .lede{color:#6a6f76;margin:10px 0 20px}
+
+  /* 步骤条 */
+  .steps{display:flex;align-items:center;gap:0;margin:0 0 20px}
+  .step{display:flex;align-items:center;gap:8px;color:#6a6f76;font-size:11.5px}
+  .step .n{
+    width:22px;height:22px;border-radius:50%;display:grid;place-items:center;
+    border:1px solid #ebedf0;font-size:11px;color:#6a6f76;background:#fff;
+  }
+  .step.cur{color:#14161a;font-weight:600}
+  .step.cur .n{background:#14161a;border-color:#14161a;color:#fff}
+  .step.done .n{border-color:#14161a;color:#14161a}
+  .bar{flex:1;height:1px;background:#ebedf0;margin:0 12px}
+
+  .panel{border:1px solid #ebedf0;border-radius:14px;padding:20px}
+  .panel h2{margin:0 0 4px;font-size:14px}
+  .panel .sub{color:#6a6f76;font-size:11.5px;margin-bottom:16px}
+
+  /* 项目卡：多选一目了然，带健康度 */
+  .cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:10px}
+  .pcard{
+    border:1px solid #ebedf0;border-radius:12px;padding:12px;cursor:pointer;position:relative;
+    transition:border-color .12s ease, background .12s ease;
+  }
+  .pcard:hover{border-color:#c9ccd1}
+  .pcard.on{border-color:#14161a;background:#fafafa}
+  .pcard .tick{
+    position:absolute;top:10px;right:10px;width:16px;height:16px;border-radius:50%;
+    border:1px solid #ebedf0;display:grid;place-items:center;font-size:10px;color:transparent;background:#fff;
+  }
+  .pcard.on .tick{background:#14161a;border-color:#14161a;color:#fff}
+  .pcard .name{font-weight:600;font-size:12.5px;padding-right:22px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .pcard .meta{color:#6a6f76;font-size:11px;margin-top:6px;display:flex;flex-wrap:wrap;gap:6px}
+  .pill{background:#f5f6f7;border-radius:999px;padding:1px 8px;color:#6a6f76;font-size:10.5px}
+  .pill.bad{color:#b3261e;background:#fdf4f3}
+
+  /* 去处：两个大选项 */
+  .choices{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+  .choice{border:1px solid #ebedf0;border-radius:12px;padding:14px;cursor:pointer}
+  .choice.on{border-color:#14161a;background:#fafafa}
+  .choice .t{font-weight:600;font-size:12.5px;display:flex;align-items:center;gap:8px}
+  .choice .d{color:#6a6f76;font-size:11px;margin-top:6px}
+  .radio{width:14px;height:14px;border-radius:50%;border:1px solid #c9ccd1;display:inline-grid;place-items:center}
+  .choice.on .radio{border-color:#14161a}
+  .choice.on .radio::after{content:"";width:7px;height:7px;border-radius:50%;background:#14161a}
+  .pathbox{margin-top:12px}
+  input[type=text]{
+    width:100%;height:32px;padding:0 10px;border:1px solid #ebedf0;border-radius:8px;
+    font:12px/1 ui-monospace,Consolas,monospace;color:#14161a;
+  }
+  input[type=text]::placeholder{color:#6a6f76}
+  input[type=text]:focus{outline:none;box-shadow:inset 1px 1px 2px rgba(20,22,26,.06),inset -1px -1px 2px #fff}
+
+  .dropzone{
+    display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px;
+    height:150px;border:1px dashed #c9ccd1;border-radius:12px;background:#fafbfb;cursor:pointer;
+  }
+  .dropzone:hover{border-color:#14161a;background:#fff}
+  .dropzone .big{font-size:13px}
+  .dropzone .small{color:#6a6f76;font-size:11px}
+
+  /* 结果 */
+  .rows{border:1px solid #ebedf0;border-radius:10px;overflow:hidden}
+  .row2{display:grid;grid-template-columns:96px minmax(0,1fr);gap:12px;padding:8px 12px;border-top:1px solid #f5f6f7}
+  .row2:first-child{border-top:0;background:#f5f6f7;color:#6a6f76}
+  .row2 .k{color:#6a6f76}
+  .row2 .v{font-family:ui-monospace,Consolas,monospace;font-size:11.5px;overflow-wrap:anywhere}
+  .row2 .v.bad{color:#b3261e}
+  .warnbar{display:flex;gap:8px;align-items:flex-start;padding:10px 12px;border-radius:10px;background:#fdf4f3;color:#b3261e;font-size:11.5px;margin-top:12px}
+  .check{display:inline-flex;align-items:center;gap:7px;color:#14161a;font-size:11.5px;margin-top:10px}
+  input[type=checkbox]{width:14px;height:14px;accent-color:#14161a;margin:0}
+
+  /* 页脚操作：主按钮永远只有一个 */
+  .foot{display:flex;align-items:center;gap:10px;margin-top:18px;padding-top:14px;border-top:1px solid #f5f6f7}
+  .foot .grow{margin-left:auto}
+  .foot .say{color:#6a6f76;font-size:11px}
+  .btn{height:32px;padding:0 14px;border-radius:8px;border:1px solid #ebedf0;background:#fff;color:#14161a;font-size:12px;cursor:pointer}
+  .btn:hover{background:#f5f6f7}
+  .btn.primary{background:#14161a;border-color:#14161a;color:#fff}
+  .btn.primary:hover{background:#2a2d33}
+  .btn.primary[disabled]{background:#ebedf0;border-color:#ebedf0;color:#6a6f76;cursor:not-allowed}
+
+  details.more{margin-top:22px;border-top:1px solid #f5f6f7;padding-top:14px}
+  details.more summary{cursor:pointer;color:#6a6f76;font-size:11.5px;list-style:none}
+  details.more summary::-webkit-details-marker{display:none}
+  details.more summary::before{content:"＋ ";}
+  details.more[open] summary::before{content:"－ "}
+  .morebody{padding-top:10px;color:#6a6f76;font-size:11.5px}
+  .morebody code{color:#14161a}
+  .badge{position:fixed;right:14px;bottom:12px;background:#14161a;color:#fff;font-size:11px;padding:4px 10px;border-radius:999px;opacity:.85}
+</style>
+</head>
+<body>
+
+<header>
+  <div class="brand"><span class="logo">kn</span>nx-kn<span class="sub">Obsidian 知识库</span></div>
+  <nav>
+    <button class="tab">首页</button>
+    <button class="tab">设置</button>
+    <button class="tab active">Obsidian</button>
+    <button class="tab">知识库</button>
+  </nav>
+  <div class="meta">v0.4.6</div>
+</header>
+
+<main>
+  <div class="seg">
+    <button id="m-export" class="on" onclick="mode('export')">导出</button>
+    <button id="m-import" onclick="mode('import')">导入</button>
+  </div>
+  <p class="lede" id="lede">把 projects/ 下的项目打成一个 zip。包里有 manifest（逐文件 sha256），不含索引。</p>
+
+  <div class="steps" id="steps"></div>
+
+  <!-- ========== 导出 ========== -->
+  <section id="ex1" class="panel">
+    <h2>选要导出的项目</h2>
+    <div class="sub">导出不修改任何东西，可以先全选。</div>
+    <div class="cards" id="cards"></div>
+    <div class="foot">
+      <span class="say" id="say1">已选 1 / 3</span>
+      <span class="grow"></span>
+      <button class="btn primary" onclick="goExport(2)">下一步</button>
+    </div>
+  </section>
+
+  <section id="ex2" class="panel" hidden>
+    <h2>包放哪儿</h2>
+    <div class="sub">两者的区别只有一个：谁决定保存位置。</div>
+    <div class="choices">
+      <div class="choice on" id="c-dl" onclick="choice('dl')">
+        <div class="t"><span class="radio"></span>下载到浏览器</div>
+        <div class="d">由浏览器的下载目录决定。适合就地备份、发给别人。</div>
+      </div>
+      <div class="choice" id="c-path" onclick="choice('path')">
+        <div class="t"><span class="radio"></span>写到指定路径</div>
+        <div class="d">服务端直接落盘，结果里回报绝对路径。适合脚本、固定备份盘。</div>
+      </div>
+    </div>
+    <div class="pathbox" id="pathbox" hidden>
+      <input type="text" id="out" placeholder="D:\backup\kn-projects.zip">
+    </div>
+    <div class="foot">
+      <button class="btn" onclick="goExport(1)">上一步</button>
+      <span class="grow"></span>
+      <span class="say">包名 kn-&lt;项目&gt;-&lt;时间戳&gt;.zip</span>
+      <button class="btn primary" onclick="goExport(3)">开始导出</button>
+    </div>
+  </section>
+
+  <section id="ex3" class="panel" hidden>
+    <h2>导出完成</h2>
+    <div class="sub">下一步是把包带到目标机器上导入；索引要重建一次。</div>
+    <div class="rows">
+      <div class="row2"><span class="k">包</span><span class="v">kn-sedoc-fe-8.60-20261026-165207.zip</span></div>
+      <div class="row2"><span class="k">大小</span><span class="v">150.8 KB（原文 320.4 KB · 29 文件）</span></div>
+      <div class="row2"><span class="k">落点</span><span class="v" id="dest">浏览器下载目录</span></div>
+      <div class="row2"><span class="k">下一步</span><span class="v">导入后跑一次 nx-kn kb index 重建索引</span></div>
+    </div>
+    <div class="foot">
+      <button class="btn" onclick="goExport(1)">再导一次</button>
+      <span class="grow"></span>
+      <button class="btn primary" onclick="alert('已在真实面板里，此原型不触发操作')">完成</button>
+    </div>
+  </section>
+
+  <!-- ========== 导入 ========== -->
+  <section id="im1" class="panel" hidden>
+    <h2>把包交给它</h2>
+    <div class="sub">拖进来即可，浏览器只给内容不给路径——这一步不会写盘。</div>
+    <div class="dropzone" onclick="goImport(2)">
+      <div class="big">把 zip 拖到这里，或点击选择</div>
+      <div class="small">100 MB 以内 · 只接受 .zip · 先预演，再决定</div>
+    </div>
+    <div class="foot">
+      <span class="say">也可以填路径：</span>
+      <input type="text" style="max-width:320px" placeholder="D:\backup\kn-sedoc.zip">
+      <span class="grow"></span>
+      <button class="btn" onclick="goImport(2)">预演</button>
+    </div>
+  </section>
+
+  <section id="im2" class="panel" hidden>
+    <h2>预演结果</h2>
+    <div class="sub">这是将要发生的事，还没有写入任何文件。</div>
+    <div class="rows">
+      <div class="row2"><span class="k">包</span><span class="v">sedoc-backup.zip</span></div>
+      <div class="row2"><span class="k">将导入</span><span class="v">sedoc-fe-8.60 · 29 文件 · 150.8 KB</span></div>
+      <div class="row2"><span class="k">project 绑定</span><span class="v">D:\DevProjects\my\todo\work\sedoc-fe-8.60（本机存在）</span></div>
+    </div>
+    <div class="warnbar">同名项目已存在：sedoc-fe-8.60。勾选下面的「覆盖」才会继续；覆盖前会整目录备份。</div>
+    <label class="check"><input type="checkbox" id="force"> 覆盖同名项目（先备份到 backup/，再替换）</label>
+    <details class="more">
+      <summary>换机器时改写 project 绑定</summary>
+      <div class="morebody">
+        <input type="text" placeholder="本机代码库绝对路径（留空 = 保留包里的旧绑定）">
+        <div style="margin-top:6px">只在 Base 的 <code>project:</code> 一行上生效，其它笔记一个字节都不动。</div>
+      </div>
+    </details>
+    <div class="foot">
+      <button class="btn" onclick="goImport(1)">换个包</button>
+      <span class="grow"></span>
+      <button class="btn primary" onclick="goImport(3)">导入</button>
+    </div>
+  </section>
+
+  <section id="im3" class="panel" hidden>
+    <h2>导入完成</h2>
+    <div class="sub">索引不在包里，记得重建一次。</div>
+    <div class="rows">
+      <div class="row2"><span class="k">已导入</span><span class="v">sedoc-fe-8.60 · 29 文件</span></div>
+      <div class="row2"><span class="k">旧目录备份</span><span class="v">~/.nx-kn/backup/import-20261026-165301/</span></div>
+      <div class="row2"><span class="k">下一步</span><span class="v">nx-kn kb index --rebuild</span></div>
+    </div>
+    <div class="foot">
+      <span class="grow"></span>
+      <button class="btn primary" onclick="goImport(1)">完成</button>
+    </div>
+  </section>
+
+  <details class="more">
+    <summary>vault 与规范文档（设置）</summary>
+    <div class="morebody">
+      vault：<code>D:\Obsidian Vault</code> · <code>.obsidian</code> 已识别<br>
+      规范文档：content = <code>nx-kn/base-content.md</code>（存在）· style = <code>nx-kn/base-style.md</code>
+      <span style="color:#b3261e">（缺失）</span>
+    </div>
+  </details>
+</main>
+
+<div class="badge">原型 B · 向导 ｜ 示意数据</div>
+
+<script>
+  const PROJECTS = [
+    { name:'sedoc-fe-8.60', docs:29, base:true, un:0 },
+    { name:'nx-kn', docs:12, base:false, un:3 },
+    { name:'archive', docs:8, base:true, un:0 }
+  ];
+  let picked = new Set(['sedoc-fe-8.60']);
+  let cur = 'export';
+  let dest = 'dl';
+
+  function mode(m){
+    cur = m;
+    document.getElementById('m-export').classList.toggle('on', m==='export');
+    document.getElementById('m-import').classList.toggle('on', m==='import');
+    document.getElementById('lede').textContent = m==='export'
+      ? '把 projects/ 下的项目打成一个 zip。包里有 manifest（逐文件 sha256），不含索引。'
+      : '从 zip 取回项目。先预演看清楚要覆盖什么，再落地；索引需要重建。';
+    steps(m==='export'?1:1, m);
+    ['ex1','ex2','ex3','im1','im2','im3'].forEach(id=>document.getElementById(id).hidden = true);
+    document.getElementById(m==='export'?'ex1':'im1').hidden = false;
+    renderCards();
+  }
+
+  function steps(n, m){
+    const labels = m==='export' ? ['选项目','选去处','完成'] : ['交付文件','预演确认','完成'];
+    document.getElementById('steps').innerHTML = labels.map((l,i)=>{
+      const idx = i+1;
+      const cls = idx===n ? 'cur' : (idx<n ? 'done' : '');
+      return `<div class="step ${cls}"><span class="n">${idx<n?'✓':idx}</span>${l}</div>`
+        + (i<labels.length-1?'<span class="bar"></span>':'');
+    }).join('');
+  }
+
+  function renderCards(){
+    const el = document.getElementById('cards');
+    if(!el) return;
+    el.innerHTML = PROJECTS.map(p=>{
+      const on = picked.has(p.name);
+      return `<div class="pcard ${on?'on':''}" onclick="toggle('${p.name}')">
+        <span class="tick">✓</span>
+        <div class="name">${p.name}</div>
+        <div class="meta">
+          <span class="pill">${p.docs} 篇</span>
+          <span class="pill ${p.base?'':'bad'}">${p.base?'根文档就位':'缺根文档'}</span>
+          <span class="pill ${p.un?'bad':''}">未解析 ${p.un}</span>
+        </div>
+      </div>`;
+    }).join('');
+    const say = document.getElementById('say1');
+    if(say) say.textContent = `已选 ${picked.size} / ${PROJECTS.length}`;
+  }
+
+  function toggle(n){
+    picked.has(n) ? picked.delete(n) : picked.add(n);
+    renderCards();
+  }
+
+  function show(id){ ['ex1','ex2','ex3','im1','im2','im3'].forEach(x=>document.getElementById(x).hidden = x!==id); }
+
+  function goExport(n){
+    if(n===2 && picked.size===0){ alert('至少选一个项目'); return; }
+    show(n===1?'ex1':n===2?'ex2':'ex3');
+    steps(n,'export');
+    if(n===3){
+      const names=[...picked];
+      const files = names.reduce((s,n)=>s+(PROJECTS.find(p=>p.name===n)?.docs||0),0);
+      document.getElementById('dest').textContent = dest==='dl' ? '浏览器下载目录' : (document.getElementById('out').value||'(未填路径)');
+      document.querySelector('#ex3 .rows .row2 .v').textContent = `kn-${names.join('+')}-20261026-165207.zip`;
+      document.querySelectorAll('#ex3 .rows .row2')[1].querySelector('.v').textContent =
+        `约 ${(files*5.2).toFixed(1)} KB（${files} 文件）`;
+    }
+  }
+
+  function choice(k){
+    dest = k;
+    document.getElementById('c-dl').classList.toggle('on', k==='dl');
+    document.getElementById('c-path').classList.toggle('on', k==='path');
+    document.getElementById('pathbox').hidden = k!=='path';
+    if(k==='path') document.getElementById('out').focus();
+  }
+
+  function goImport(n){
+    show(n===1?'im1':n===2?'im2':'im3');
+    steps(n,'import');
+  }
+
+  mode('export');
+</script>
+</body>
+</html>

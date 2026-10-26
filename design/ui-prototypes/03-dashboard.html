@@ -1,0 +1,747 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>原型 C · 总览（表格 + 抽屉）v2</title>
+<style>
+  :root{
+    --ink:#14161a; --mid:#6a6f76; --paper:#fff;
+    --soft:#f5f6f7; --soft2:#fafbfb; --soft3:#eef0f2;
+    --line:#ebedf0; --line2:#f2f3f5;
+    --bad:#b3261e; --badbg:#fdf4f3;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--paper);color:var(--ink);
+    font:12px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei",sans-serif}
+  code,.mono{font-family:ui-monospace,Consolas,"Cascadia Mono",monospace}
+  :focus-visible{outline:2px solid var(--ink);outline-offset:2px;border-radius:4px}
+
+  /* ---------- header ---------- */
+  header{
+    position:sticky;top:0;z-index:20;display:flex;align-items:center;gap:12px;
+    height:44px;padding:0 16px;background:var(--paper);border-bottom:1px solid var(--line)}
+  .brand{font-weight:700;letter-spacing:.5px;display:flex;align-items:center;gap:8px}
+  .logo{width:22px;height:22px;border-radius:6px;background:var(--ink);color:#fff;display:grid;place-items:center;font-size:11px}
+  .brand .sub{font-weight:400;color:var(--mid)}
+  nav{display:flex;gap:2px}
+  .tab{border:0;background:none;min-height:44px;padding:0 12px;color:var(--mid);font:inherit;font-size:13px;cursor:pointer}
+  .tab.active{color:var(--ink);font-weight:600;box-shadow:inset 0 -2px 0 var(--ink)}
+  .meta{margin-left:auto;color:var(--mid)}
+
+  /* 满幅：main 是块级元素，默认就是 100%；这里**不要**加 max-width——
+     加了就变成「左边硬性截断、右边一条空」的假居中（且并非真居中，因为没有 margin:auto）。
+     宽屏下表格该多宽就多宽，信息密度靠列宽与留白控制，不靠掐容器宽度。 */
+  main{width:100%;padding:16px 16px 40px}
+
+  /* ---------- 页头：一句话说清「现在操作哪个库、什么状态」---------- */
+  .pagehead{display:flex;align-items:flex-start;gap:16px;padding-bottom:14px}
+  .pagehead h1{margin:0;font-size:19px;font-weight:600;letter-spacing:.2px}
+  .phmeta{margin-top:4px;color:var(--mid);font-size:11.5px;display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+  .phmeta .path{font-family:ui-monospace,Consolas,monospace;color:var(--ink)}
+  .phmeta .sep{width:1px;height:11px;background:var(--line)}
+  .phright{margin-left:auto;display:flex;align-items:center;gap:6px;padding-top:2px}
+
+  /* 信号 chip：只报「需要你动手的」，健康态不刷存在感 */
+  .sig{display:inline-flex;align-items:center;gap:5px;height:24px;padding:0 9px;border-radius:999px;
+    background:var(--soft);color:var(--ink);font-size:11.5px;white-space:nowrap}
+  .sig .n{font-weight:600;font-variant-numeric:tabular-nums}
+  .sig.bad{background:var(--badbg);color:var(--bad)}
+  .sig.ok{background:var(--soft);color:var(--mid)}
+
+  /* ---------- 工具条 ---------- */
+  .toolbar{display:flex;align-items:center;gap:8px;padding:10px 0 10px;border-top:1px solid var(--line);flex-wrap:wrap}
+  .chips{display:flex;gap:4px}
+  .chip{height:26px;padding:0 10px;border-radius:999px;border:1px solid var(--line);background:var(--paper);
+    color:var(--mid);font:inherit;font-size:11.5px;cursor:pointer;white-space:nowrap}
+  .chip:hover{color:var(--ink);border-color:#dcdfe3}
+  .chip.on{background:var(--ink);border-color:var(--ink);color:#fff}
+  .chip .c{font-variant-numeric:tabular-nums;opacity:.75;margin-left:3px}
+  .grow{margin-left:auto}
+  .search{width:190px;height:28px;padding:0 10px;border:1px solid var(--line);border-radius:8px;
+    font:inherit;font-size:12px;color:var(--ink);background:var(--paper)}
+  .search::placeholder{color:var(--mid)}
+  .search:focus{outline:none;border-color:#c9ccd1;box-shadow:0 0 0 3px rgba(20,22,26,.05)}
+  .btn{height:28px;padding:0 11px;border-radius:8px;border:1px solid var(--line);background:var(--paper);
+    color:var(--ink);font:inherit;font-size:12px;cursor:pointer;white-space:nowrap}
+  .btn:hover{background:var(--soft)}
+  .btn.primary{background:var(--ink);border-color:var(--ink);color:#fff}
+  .btn.primary:hover{background:#2a2d33}
+  .btn[disabled]{color:var(--mid);cursor:not-allowed;background:var(--soft);border-color:var(--line)}
+  .btn[disabled]:hover{background:var(--soft)}
+
+  /* ---------- 表格 ---------- */
+  /* 圆角不能靠 wrapper 的 overflow:hidden —— 那会让 .twrap 成为 sticky 表头的
+     滚动容器，表头被粘到「容器内 44px」处压住首行（实测如此）。圆角给到行自身。 */
+  .twrap{border:1px solid var(--line);border-radius:12px}
+  /* 列宽按比例分配（不是「项目列吃掉所有余量」）：只给一列 auto 时，
+     table-layout:fixed 会把 100% 的剩余全塞给它——1440 宽度下实测是 928px，
+     左边一大片空白、右边 5 列挤成一坨。百分比让各列在任何视口下比例一致。 */
+  table{width:100%;border-collapse:separate;border-spacing:0;table-layout:fixed}
+  thead th{
+    position:sticky;top:44px;z-index:2;
+    background:var(--soft);color:var(--mid);font-weight:500;font-size:11.5px;text-align:left;
+    height:32px;padding:0 12px;border-bottom:1px solid var(--line);white-space:nowrap}
+  thead th:first-child{width:38px}
+  thead th:nth-child(2){width:42%}
+  thead th:nth-child(3){width:7%}
+  thead th:nth-child(4){width:8%}
+  thead th:nth-child(5){width:10%}
+  thead th:nth-child(6){width:18%}
+  thead th:nth-child(7){width:12%}
+  /* 注意：fixed 布局下别想给某一列设 max 上限（width:min(12%,110px) 之类）——
+     各列指定宽度合计不足 100% 时，余量会按比例摊回每一列，min() 直接失效（1920 实测）。
+     宽屏的余量注定要流向项目列，就让它流。 */
+  /* 时间列右对齐：等宽数字贴着右边看「新旧」比左对齐更省眼 */
+  thead th:nth-child(6){text-align:right}
+  tbody td:nth-child(6){text-align:right}
+  thead th:first-child{border-top-left-radius:11px}
+  thead th:last-child{border-top-right-radius:11px}
+  tbody tr:last-child td:first-child{border-bottom-left-radius:11px}
+  tbody tr:last-child td:last-child{border-bottom-right-radius:11px}
+  th.s{cursor:pointer;user-select:none}
+  th.s:hover{color:var(--ink)}
+  th .ar{display:inline-block;width:9px;margin-left:3px;font-size:9px;opacity:0}
+  th.on .ar{opacity:1}
+  tbody td{height:44px;padding:0 12px;border-bottom:1px solid var(--line2);vertical-align:middle}
+  tbody tr:last-child td{border-bottom:0}
+  tbody tr{background:var(--paper);cursor:pointer}
+  tbody tr:hover{background:var(--soft2)}
+  tbody tr.on{background:var(--soft)}
+  tbody tr.on:hover{background:var(--soft3)}
+  tbody tr.empty-row{cursor:default;background:var(--paper)}
+  tbody tr.empty-row:hover{background:var(--paper)}
+
+  .pname{font-weight:600;font-size:12.5px;display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .pbind{display:block;color:var(--mid);font-size:11px;font-family:ui-monospace,Consolas,monospace;
+    overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin-top:1px}
+  .num{text-align:right;font-variant-numeric:tabular-nums}
+  .muted{color:var(--mid)}
+  .un{color:var(--bad);font-weight:600;font-variant-numeric:tabular-nums}
+  .un.z{color:var(--mid);font-weight:400}
+  .st{font-size:11.5px;white-space:nowrap}
+  .st.ok{color:var(--mid)}
+  .st.bad{color:var(--bad)}
+  .st .d{display:inline-block;width:5px;height:5px;border-radius:50%;margin-right:5px;vertical-align:1px}
+  .st.ok .d{background:#9aa0a7}
+  .st.bad .d{background:var(--bad)}
+  input[type=checkbox]{width:14px;height:14px;accent-color:var(--ink);margin:0;vertical-align:-2px}
+
+  /* 行内快捷操作：平时不占位，悬浮/聚焦才出现 —— 表格默认只有 ⋯ 太浪费一列 */
+  .ract{display:flex;gap:2px;justify-content:flex-end;opacity:0;transition:opacity .1s}
+  tbody tr:hover .ract,tbody tr:focus-within .ract{opacity:1}
+  .iconb{width:26px;height:26px;display:grid;place-items:center;border:0;background:none;
+    border-radius:6px;color:var(--mid);cursor:pointer}
+  .iconb:hover{background:var(--paper);color:var(--ink);box-shadow:0 0 0 1px var(--line)}
+  tr.on .iconb:hover{background:var(--paper)}
+
+  .tfoot{display:flex;align-items:center;gap:10px;padding:8px 12px;border-top:1px solid var(--line);
+    background:var(--soft2);color:var(--mid);font-size:11.5px}
+  .tfoot b{color:var(--ink);font-weight:600;font-variant-numeric:tabular-nums}
+
+  .note{margin:14px 0 0;color:var(--mid);font-size:11.5px}
+  .note code{background:var(--soft);padding:1px 5px;border-radius:5px;color:var(--ink)}
+
+  /* ---------- 抽屉 ---------- */
+  .scrim{position:fixed;inset:0;background:rgba(20,22,26,.16);opacity:0;pointer-events:none;
+    transition:opacity .16s ease;z-index:30}
+  .scrim.on{opacity:1;pointer-events:auto}
+  .drawer{
+    position:fixed;top:0;right:0;height:100%;width:480px;max-width:100vw;background:var(--paper);z-index:31;
+    border-left:1px solid var(--line);box-shadow:-8px 0 40px rgba(20,22,26,.10);
+    transform:translateX(100%);transition:transform .18s ease;display:flex;flex-direction:column}
+  .drawer.on{transform:none}
+  .dhead{padding:14px 16px 12px;border-bottom:1px solid var(--line);display:flex;align-items:flex-start;gap:10px}
+  .dhead .back{border:0;background:none;color:var(--mid);font-size:15px;cursor:pointer;padding:0 4px 0 0;line-height:1;margin-top:2px}
+  .dhead .back:hover{color:var(--ink)}
+  .dhead h2{margin:0;font-size:14.5px;font-weight:600;letter-spacing:.2px}
+  .dhead .sub{color:var(--mid);font-size:11.5px;margin-top:2px;line-height:1.5}
+  .dhead .x{margin-left:auto;border:0;background:none;font-size:18px;color:var(--mid);cursor:pointer;line-height:1;padding:0 2px}
+  .dhead .x:hover{color:var(--ink)}
+  .dbody{flex:1;overflow:auto;padding:14px 16px 20px}
+  .sect{color:var(--mid);font-size:11px;letter-spacing:.4px;margin:0 0 7px;font-weight:500}
+  .sect + .sect{margin-top:16px}
+
+  .kv2{display:grid;grid-template-columns:56px minmax(0,1fr);gap:2px 10px;font-size:11.5px}
+  .kv2 .k{color:var(--mid)}
+  .kv2 .v{font-family:ui-monospace,Consolas,monospace;overflow-wrap:anywhere}
+
+  .doc{display:grid;grid-template-columns:minmax(0,1fr) 116px;gap:10px;align-items:baseline;
+    height:28px;border-bottom:1px solid var(--line2)}
+  .doc:last-child{border-bottom:0}
+  .doc .f{font-family:ui-monospace,Consolas,monospace;font-size:11.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .doc .h{color:var(--mid);font-size:11px;text-align:right;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .more{width:100%;height:28px;border:0;background:none;color:var(--mid);font:inherit;font-size:11.5px;cursor:pointer;text-align:left}
+  .more:hover{color:var(--ink)}
+
+  .dfoot{padding:11px 16px;border-top:1px solid var(--line);display:flex;gap:8px;align-items:center;background:var(--paper)}
+  .dfoot .grow{margin-left:auto}
+  .dfoot .hint{color:var(--mid);font-size:11.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+
+  /* 导出/导入表单 */
+  .field{display:flex;gap:8px;margin-top:2px}
+  .field input{flex:1;min-width:0;height:30px;padding:0 10px;border:1px solid var(--line);border-radius:8px;
+    font:11.5px/1 ui-monospace,Consolas,monospace;color:var(--ink)}
+  .field input::placeholder{color:var(--mid);font-family:inherit}
+  .field input:focus{outline:none;border-color:#c9ccd1;box-shadow:0 0 0 3px rgba(20,22,26,.05)}
+  .fhint{color:var(--mid);font-size:11px;margin-top:6px}
+
+  .pick{display:flex;flex-wrap:wrap;gap:6px}
+  .tagp{display:inline-flex;align-items:center;gap:6px;height:24px;padding:0 8px;border-radius:6px;
+    background:var(--soft);font-size:11.5px}
+  .tagp .c{color:var(--mid);font-variant-numeric:tabular-nums}
+  .tagp.bad{background:var(--badbg);color:var(--bad)}
+
+  .drop{
+    display:flex;flex-direction:column;gap:3px;align-items:center;justify-content:center;
+    height:104px;border:1px dashed #c9ccd1;border-radius:10px;background:var(--soft2);cursor:pointer}
+  .drop:hover,.drop.hot{border-color:var(--ink);background:var(--paper)}
+  .drop .t{font-size:12px}
+  .drop .s{color:var(--mid);font-size:11px}
+  .drop.has{border-style:solid;border-color:var(--ink);background:var(--paper)}
+
+  label.chk{display:flex;align-items:flex-start;gap:7px;margin-top:12px;color:var(--ink);font-size:11.5px;line-height:1.5}
+  label.chk.off{color:var(--mid)}
+  label.chk input{margin-top:2px}
+
+  .res{border:1px solid var(--line);border-radius:10px;margin-top:12px;overflow:hidden}
+  .res .rh{background:var(--soft);color:var(--mid);font-size:11px;padding:6px 10px;display:flex;align-items:center;gap:6px}
+  .res .rh.bad{background:var(--badbg);color:var(--bad)}
+  .rrow{display:grid;grid-template-columns:66px minmax(0,1fr);gap:8px;padding:6px 10px;border-top:1px solid var(--line2);font-size:11.5px}
+  .rrow .k{color:var(--mid)}
+  .rrow .v{font-family:ui-monospace,Consolas,monospace;font-size:11px;overflow-wrap:anywhere}
+  .rrow .v.bad{color:var(--bad)}
+  .rrow .v.ok{color:var(--ink)}
+  .empty2{color:var(--mid);font-size:11.5px;padding:6px 0}
+
+  .badge{position:fixed;left:14px;bottom:12px;background:var(--ink);color:#fff;font-size:11px;
+    padding:4px 10px;border-radius:999px;opacity:.82;z-index:40}
+
+  @media (max-width:760px){
+    .drawer{width:100%}
+    .phright{width:100%;margin-left:0}
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="brand"><span class="logo">kn</span>nx-kn<span class="sub">Obsidian 知识库</span></div>
+  <nav>
+    <button class="tab">首页</button>
+    <button class="tab">设置</button>
+    <button class="tab active">Obsidian</button>
+    <button class="tab">知识库</button>
+  </nav>
+  <div class="meta">v0.4.6</div>
+</header>
+
+<main>
+  <div class="pagehead">
+    <div>
+      <h1>Obsidian</h1>
+      <div class="phmeta">
+        <span class="path" id="vpath">D:\Obsidian Vault</span>
+        <span class="sep"></span>
+        <span id="pcount">4 个项目 · 51 篇文档</span>
+        <span class="sep"></span>
+        <span>索引 192 篇 · 2 小时前</span>
+      </div>
+    </div>
+    <div class="phright">
+      <span class="sig bad" id="s-un"><span class="n">4</span> 处未解析</span>
+      <span class="sig bad" id="s-base"><span class="n">2</span> 个项目缺根文档</span>
+      <button class="btn" onclick="toast('打开设置（原型）')">设置</button>
+    </div>
+  </div>
+
+  <div class="toolbar">
+    <div class="chips" id="chips"></div>
+    <span class="grow"></span>
+    <input class="search" id="q" placeholder="按项目名筛选" oninput="onSearch(this.value)">
+    <button class="btn" onclick="openImport()">导入 zip…</button>
+    <button class="btn primary" id="btn-export" onclick="openExport()">导出所选…</button>
+  </div>
+
+  <div class="twrap">
+    <table>
+      <thead>
+        <tr>
+          <th><input type="checkbox" id="all" aria-label="全选" onchange="toggleAll(this.checked)"></th>
+          <th class="s" data-k="name" onclick="setSort('name')">项目<span class="ar">▲</span></th>
+          <th class="s num" data-k="docs" onclick="setSort('docs')">文档<span class="ar">▼</span></th>
+          <th class="s" data-k="un" onclick="setSort('un')">未解析<span class="ar">▼</span></th>
+          <th>根文档</th>
+          <th class="s" data-k="at" onclick="setSort('at')">最近更新<span class="ar">▼</span></th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody id="tbody"></tbody>
+    </table>
+    <div class="tfoot" id="tfoot"></div>
+  </div>
+
+  <p class="note">
+    点行打开详情；复选框只用于批量导出。索引不在迁移包里，导入后要 <code>kb index</code> 重建。
+  </p>
+</main>
+
+<div class="scrim" id="scrim" onclick="closeDrawer()"></div>
+
+<aside class="drawer" id="drawer" role="dialog" aria-modal="true" aria-labelledby="dtitle">
+  <div class="dhead">
+    <button class="back" id="dback" hidden onclick="backToProject()" aria-label="返回">←</button>
+    <div style="min-width:0">
+      <h2 id="dtitle">—</h2>
+      <div class="sub" id="dsub"></div>
+    </div>
+    <button class="x" onclick="closeDrawer()" aria-label="关闭">×</button>
+  </div>
+  <div class="dbody" id="dbody"></div>
+  <div class="dfoot" id="dfoot"></div>
+</aside>
+
+<div class="badge" id="badge">原型 C · 总览 v2 ｜ 示意数据</div>
+
+<script>
+/* ============================================================
+   数据
+   ============================================================ */
+const PROJECTS = [
+  { name:'sedoc-fe-8.60', docs:29, base:true,  un:0, at:'2026-10-26 16:12',
+    bind:'D:\\DevProjects\\my\\todo\\work\\sedoc-fe-8.60',
+    list:[['Base-sedoc-fe-8.60.md','sedoc-fe-8.60'],['UI收敛总纲.md','UI 收敛'],['主题系统.md','主题系统'],
+          ['组件规范.md','组件规范'],['主题-策略模式.md','主题策略模式'],['标签栏主题化.md','TagsView 主题化'],
+          ['表单校验.md','表单校验'],['代码风格.md','代码风格']] },
+  { name:'nx-kn', docs:12, base:false, un:3, at:'2026-10-25 09:40',
+    bind:'D:\\DevProjects\\my\\github\\nx-kn',
+    list:[['面板令牌.md','面板令牌'],['检索链路.md','检索链路'],['zg 接入.md','zg 接入'],
+          ['迁移包格式.md','迁移包格式'],['项目模式.md','项目模式'],['测试约定.md','测试约定']] },
+  { name:'archive', docs:8, base:true, un:0, at:'2026-09-30 18:05',
+    bind:'D:\\DevProjects\\my\\archive',
+    list:[['Base-archive.md','archive'],['归档流程.md','归档流程'],['元数据规范.md','元数据规范']] },
+  { name:'scratch', docs:2, base:false, un:1, at:'2026-08-14 11:22',
+    bind:'（未绑定代码库）',
+    list:[['随手记.md','随手记'],['待整理.md','待整理']] },
+];
+
+let picked = new Set(['sedoc-fe-8.60']);
+let filter = 'all';
+let q = '';
+let sortKey = 'un', sortDir = -1;
+let stage = null;        // 'project' | 'export' | 'import'
+let curName = null;      // 从详情进入导出时记住来源，供 ← 返回
+let exportNames = [];    // 当前导出范围（影响包名提示的写法）
+let dryOk = false;       // 预演是否通过
+let dryConflict = false; // 预演是否报了同名冲突
+let hasFile = false;
+
+const $ = (id) => document.getElementById(id);
+
+/* ============================================================
+   列表
+   ============================================================ */
+function visible(){
+  let rows = PROJECTS.filter(p => {
+    if (q && !p.name.toLowerCase().includes(q.toLowerCase())) return false;
+    if (filter === 'un') return p.un > 0;
+    if (filter === 'nobase') return !p.base;
+    if (filter === 'picked') return picked.has(p.name);
+    return true;
+  });
+  const dir = sortDir;
+  rows.sort((a,b) => {
+    let r;
+    if (sortKey === 'name') r = a.name.localeCompare(b.name);
+    else if (sortKey === 'at') r = a.at.localeCompare(b.at);
+    else r = a[sortKey] - b[sortKey];
+    if (r !== 0) return r * dir;
+    // 同值永远按名字升序：跟着 dir 一起翻会让「并列的两行」在切换升降序时莫名换位
+    return a.name.localeCompare(b.name);
+  });
+  return rows;
+}
+
+function render(){
+  const rows = visible();
+  const tb = $('tbody');
+
+  if (!rows.length){
+    tb.innerHTML = `<tr class="empty-row"><td colspan="7" style="height:96px;text-align:center;color:var(--mid)">
+      没有匹配的项目${q ? `（筛选词「${esc(q)}」）` : ''}
+    </td></tr>`;
+  } else {
+    tb.innerHTML = rows.map(p => `
+      <tr class="${picked.has(p.name)?'on':''}" tabindex="0"
+          onclick="openProject('${p.name}')"
+          onkeydown="if(event.key==='Enter'){openProject('${p.name}')}">
+        <td onclick="event.stopPropagation()">
+          <input type="checkbox" aria-label="选择 ${esc(p.name)}" ${picked.has(p.name)?'checked':''}
+                 onchange="toggle('${p.name}',this.checked)">
+        </td>
+        <td>
+          <span class="pname">${esc(p.name)}</span>
+          <span class="pbind" title="${esc(p.bind)}">${esc(p.bind)}</span>
+        </td>
+        <td class="num">${p.docs}</td>
+        <td class="num">${p.un ? `<span class="un">${p.un}</span>` : '<span class="un z">—</span>'}</td>
+        <td>${p.base ? '<span class="st ok"><span class="d"></span>就位</span>'
+                     : '<span class="st bad"><span class="d"></span>缺失</span>'}</td>
+        <td class="muted">${rel(p.at)}</td>
+        <td onclick="event.stopPropagation()">
+          <div class="ract">
+            <button class="iconb" title="导出此项目" onclick="openExport('${p.name}')">
+              <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4">
+                <path d="M8 2v8M5 7l3 3 3-3M2.5 12.5h11"/></svg>
+            </button>
+            <button class="iconb" title="打开详情" onclick="openProject('${p.name}')">
+              <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4">
+                <path d="M6 3l5 5-5 5"/></svg>
+            </button>
+          </div>
+        </td>
+      </tr>`).join('');
+  }
+
+  // 表头排序指示
+  document.querySelectorAll('th.s').forEach(th => {
+    const on = th.dataset.k === sortKey;
+    th.classList.toggle('on', on);
+    if (on) th.querySelector('.ar').textContent = sortDir < 0 ? '▼' : '▲';
+  });
+
+  // 合计
+  const pickList = PROJECTS.filter(p => picked.has(p.name));
+  const pickDocs = pickList.reduce((s,p) => s + p.docs, 0);
+  const shownDocs = rows.reduce((s,p) => s + p.docs, 0);
+  $('tfoot').innerHTML =
+    `<span>显示 <b>${rows.length}</b> / ${PROJECTS.length} 个项目 · <b>${shownDocs}</b> 篇</span>
+     <span class="grow" style="margin-left:auto"></span>
+     <span>${pickList.length ? `已选 <b>${pickList.length}</b> 个 · <b>${pickDocs}</b> 篇` : '未选任何项目'}</span>`;
+
+  $('btn-export').textContent = pickList.length ? `导出所选（${pickList.length}）…` : '导出所选…';
+  $('btn-export').disabled = pickList.length === 0;
+  $('all').checked = rows.length > 0 && rows.every(p => picked.has(p.name));
+
+  renderChips();
+  renderSignals();
+}
+
+function renderChips(){
+  const defs = [
+    ['all',   '全部',       PROJECTS.length],
+    ['un',    '有未解析',   PROJECTS.filter(p=>p.un>0).length],
+    ['nobase','缺根文档',   PROJECTS.filter(p=>!p.base).length],
+    ['picked','已选',       picked.size],
+  ];
+  $('chips').innerHTML = defs.map(([k,label,n]) => `
+    <button class="chip ${filter===k?'on':''}" onclick="setFilter('${k}')">
+      ${label}<span class="c">${n}</span></button>`).join('');
+}
+
+function renderSignals(){
+  const un = PROJECTS.reduce((s,p)=>s+p.un,0);
+  const noBase = PROJECTS.filter(p=>!p.base).length;
+  const su = $('s-un'), sb = $('s-base');
+  su.className = 'sig ' + (un ? 'bad' : 'ok');
+  su.innerHTML = un ? `<span class="n">${un}</span> 处未解析` : '链接全部可解析';
+  sb.className = 'sig ' + (noBase ? 'bad' : 'ok');
+  sb.innerHTML = noBase ? `<span class="n">${noBase}</span> 个项目缺根文档` : '根文档齐全';
+}
+
+function setFilter(k){ filter = k; render(); }
+function onSearch(v){ q = v.trim(); render(); }
+function setSort(k){
+  if (sortKey === k) sortDir = -sortDir;
+  else { sortKey = k; sortDir = k === 'name' ? 1 : -1; }
+  render();
+}
+function toggle(n, on){ on ? picked.add(n) : picked.delete(n); render(); }
+function toggleAll(on){
+  visible().forEach(p => on ? picked.add(p.name) : picked.delete(p.name));
+  render();
+}
+
+/* ============================================================
+   抽屉
+   ============================================================ */
+function openDrawer(){
+  $('drawer').classList.add('on');
+  $('scrim').classList.add('on');
+  $('dback').hidden = true;
+  // 焦点进抽屉，Esc 可关（键盘用户不必去找 × ）
+  setTimeout(() => {
+    const f = $('dfoot').querySelector('button.primary') || $('drawer').querySelector('button');
+    if (f) f.focus();
+  }, 190);
+}
+function closeDrawer(){
+  $('drawer').classList.remove('on');
+  $('scrim').classList.remove('on');
+  stage = null; curName = null; dryOk = false; dryConflict = false; hasFile = false;
+}
+function backToProject(){
+  if (curName) openProject(curName);
+}
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape' && $('drawer').classList.contains('on')) closeDrawer();
+});
+
+function openProject(name){
+  const p = PROJECTS.find(x => x.name === name);
+  if (!p) return;
+  stage = 'project'; curName = name;
+
+  $('dtitle').textContent = p.name;
+  $('dsub').innerHTML =
+    `${p.docs} 篇 · ${p.base ? '根文档就位' : '<span class="st bad">缺根文档</span>'} ·
+     未解析 ${p.un ? `<span class="un">${p.un}</span>` : '0'} · 更新于 ${rel(p.at)}`;
+
+  const shown = p.list;
+  $('dbody').innerHTML = `
+    <div class="sect">代码库绑定</div>
+    <div class="kv2">
+      <span class="k">路径</span><span class="v">${esc(p.bind)}</span>
+      <span class="k">根文档</span><span class="v">${p.base ? `Base-${esc(p.name)}.md` : '（尚无，用 ask 建）'}</span>
+    </div>
+
+    <div class="sect">文档（${p.docs}）</div>
+    <div id="doclist">
+      ${shown.map(([f,h])=>`<div class="doc"><span class="f">${esc(f)}</span><span class="h">${esc(h)}</span></div>`).join('')}
+    </div>
+    ${p.docs > shown.length
+      ? `<button class="more" onclick="expandDocs('${p.name}')">展开另外 ${p.docs - shown.length} 篇…</button>`
+      : ''}
+
+    ${p.un ? `<div class="sect">待修</div>
+      <div class="empty2">${p.un} 处未解析链接。先跑 <code>obsidian scan --project …</code> 看清楚，再逐条修。</div>` : ''}
+  `;
+
+  $('dfoot').innerHTML = `
+    <button class="btn" onclick="openImport()">导入覆盖…</button>
+    <span class="grow"></span>
+    <button class="btn primary" onclick="openExport('${p.name}')">导出此项目…</button>`;
+
+  openDrawer();
+}
+
+function expandDocs(name){
+  const p = PROJECTS.find(x => x.name === name);
+  const rest = p.docs - p.list.length;
+  const fake = Array.from({length: rest}, (_, i) => [`笔记-${String(i + 1).padStart(2,'0')}.md`, '（示意）']);
+  const all = p.list.concat(fake);
+  $('doclist').innerHTML = all.map(([f,h]) =>
+    `<div class="doc"><span class="f">${esc(f)}</span><span class="h">${esc(h)}</span></div>`).join('');
+  const more = document.querySelector('.more');
+  if (more) more.remove();
+}
+
+/* ---------- 导出 ---------- */
+function openExport(onlyName){
+  stage = 'export';
+  const prev = curName;
+  if (onlyName) curName = onlyName;
+
+  const names = onlyName ? [onlyName] : PROJECTS.filter(p => picked.has(p.name)).map(p => p.name);
+  const files = PROJECTS.filter(p => names.includes(p.name)).reduce((s,p)=>s+p.docs,0);
+  exportNames = names;
+
+  $('dback').hidden = !(onlyName && prev);
+  $('dtitle').textContent = '导出';
+  $('dsub').innerHTML = `${names.length} 个项目 · ${files} 个文件`;
+  $('dbody').innerHTML = `
+    <div class="sect">将导出</div>
+    <div class="pick">
+      ${names.length
+        ? names.map(n => {
+            const p = PROJECTS.find(x=>x.name===n);
+            const tip = p.base ? `${p.docs} 篇` : `${p.docs} 篇 · 缺根文档（导出不受影响，但目标机器仍需 ask 建根）`;
+            return `<span class="tagp ${p.base?'':'bad'}" title="${esc(tip)}">${esc(n)}<span class="c">${p.docs}</span></span>`;
+          }).join('')
+        : '<span class="tagp bad">没有勾选项目</span>'}
+    </div>
+
+    <div class="sect">写到哪儿</div>
+    <div class="field">
+      <input id="out" placeholder="输出 zip 路径（可留空）" oninput="updExportHint()">
+    </div>
+    <div class="fhint" id="outhint"></div>
+
+    <div class="res" id="res" hidden></div>
+  `;
+
+  $('dfoot').innerHTML = `
+    <span class="hint">不含 zg 索引，导入后需 kb index</span>
+    <span class="grow"></span>
+    <button class="btn primary" ${names.length?'':'disabled'} onclick="doExport()">开始导出</button>`;
+  updExportHint();
+  openDrawer();
+}
+
+function updExportHint(){
+  const el = $('out'); if (!el) return;
+  const v = el.value.trim();
+  // 单项目给具体包名（看得见才相信），多项目只给规则，不编一个不存在的名字
+  const sample = exportNames.length === 1
+    ? `kn-${exportNames[0]}-20261026-1702.zip`
+    : 'kn-<项目>-<时间戳>.zip';
+  $('outhint').innerHTML = v
+    ? `包名 <code>${esc(sample)}</code>，写到 <span class="mono">${esc(v)}</span>`
+    : `留空 = 交给浏览器，包名 <code>${esc(sample)}</code>`;
+}
+
+function doExport(){
+  const res = $('res'); if (!res) return;
+  res.hidden = false;
+  res.innerHTML = `
+    <div class="rh">导出完成</div>
+    <div class="rrow"><span class="k">包</span><span class="v">kn-sedoc-fe-8.60-20261026-1702.zip</span></div>
+    <div class="rrow"><span class="k">大小</span><span class="v">150.8 KB · 29 文件</span></div>
+    <div class="rrow"><span class="k">落点</span><span class="v">浏览器下载</span></div>
+    <div class="rrow"><span class="k">下一步</span><span class="v">目标机器 kn obsidian import --file …</span></div>`;
+  toast('已导出');
+}
+
+/* ---------- 导入 ---------- */
+function openImport(){
+  stage = 'import'; dryOk = false; dryConflict = false; hasFile = false;
+
+  $('dback').hidden = true;
+  $('dtitle').textContent = '导入 zip';
+  $('dsub').textContent = '先预演看清楚会改什么，再落地';
+
+  $('dbody').innerHTML = `
+    <div class="sect">交付一个包</div>
+    <div class="drop" id="drop" tabindex="0"
+         onclick="pickFile('sedoc-backup.zip')"
+         onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();pickFile('sedoc-backup.zip')}">
+      <div class="t" id="dropT">把 zip 拖到这里，或点击选择</div>
+      <div class="s" id="dropS">选好之后先点「预演」</div>
+    </div>
+    <div class="field" style="margin-top:8px">
+      <input id="inpath" placeholder="或填 zip 绝对路径" oninput="onInPath(this.value)">
+    </div>
+
+    <div class="res" id="res" hidden></div>
+
+    <label class="chk off" id="forcelbl">
+      <input type="checkbox" id="force" disabled onchange="updImportBtn()">
+      <span>覆盖同名项目<span class="muted">（先整目录备份到 ~/.nx-kn/backup/）</span></span>
+    </label>
+  `;
+
+  $('dfoot').innerHTML = `
+    <span class="hint">预演 = 零写入</span>
+    <span class="grow"></span>
+    <button class="btn" id="btn-dry" disabled onclick="dry()">预演</button>
+    <button class="btn primary" id="btn-do" disabled onclick="doImport()">导入</button>`;
+
+  openDrawer();
+}
+
+// 拖拽：dragover 要 preventDefault，否则浏览器会直接打开这个 zip
+document.addEventListener('dragover', e => {
+  const d = $('drop'); if (!d || !$('drawer').classList.contains('on')) return;
+  e.preventDefault(); d.classList.add('hot');
+});
+document.addEventListener('dragleave', e => {
+  const d = $('drop'); if (d) d.classList.remove('hot');
+});
+document.addEventListener('drop', e => {
+  const d = $('drop'); if (!d || stage !== 'import') return;
+  e.preventDefault(); d.classList.remove('hot');
+  const f = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0];
+  pickFile(f ? f.name : 'dropped.zip');
+});
+
+function pickFile(n){
+  hasFile = true; dryOk = false; dryConflict = false;
+  const d = $('drop');
+  if (d){ d.classList.add('has'); }
+  const t = $('dropT'), s = $('dropS');
+  if (t) t.textContent = n;
+  if (s) s.textContent = '已选 · 点「预演」检查';
+  const ip = $('inpath'); if (ip) ip.value = '';
+  $('res').hidden = true;
+  $('btn-dry').disabled = false;
+  updImportBtn();
+  toast('已选择 ' + n);
+}
+
+function onInPath(v){
+  hasFile = v.trim().length > 0;
+  dryOk = false; dryConflict = false;
+  $('btn-dry').disabled = !hasFile;
+  const t = $('dropT'), s = $('dropS');
+  if (t) t.textContent = hasFile ? v.trim() : '把 zip 拖到这里，或点击选择';
+  updImportBtn();
+}
+
+function updImportBtn(){
+  const f = $('force'), lb = $('forcelbl'), b = $('btn-do');
+  if (!b) return;
+  // 只有预演报出冲突，「覆盖」才有意义 —— 提前摆一个能勾的开关等于诱导误操作
+  if (f){ f.disabled = !dryConflict; }
+  if (lb) lb.classList.toggle('off', f ? f.disabled : true);
+  b.disabled = !(dryOk && (!dryConflict || (f && f.checked)));
+}
+
+function dry(){
+  dryOk = true; dryConflict = true;
+  const res = $('res');
+  res.hidden = false;
+  res.innerHTML = `
+    <div class="rh bad">预演 · 发现 1 处冲突（没有写入任何文件）</div>
+    <div class="rrow"><span class="k">包</span><span class="v">sedoc-backup.zip · 154 KB</span></div>
+    <div class="rrow"><span class="k">将导入</span><span class="v">sedoc-fe-8.60 · 29 文件</span></div>
+    <div class="rrow"><span class="k">校验</span><span class="v ok">manifest 与 sha256 全部通过</span></div>
+    <div class="rrow"><span class="k">绑定</span><span class="v">project: D:\\DevProjects\\my\\todo\\work\\sedoc-fe-8.60（本机存在）</span></div>
+    <div class="rrow"><span class="k">冲突</span><span class="v bad">同名项目已存在 → 勾选下方「覆盖同名项目」后才能导入</span></div>`;
+  updImportBtn();
+}
+
+function doImport(){
+  const res = $('res');
+  res.hidden = false;
+  res.innerHTML = `
+    <div class="rh">导入完成</div>
+    <div class="rrow"><span class="k">已导入</span><span class="v">sedoc-fe-8.60 · 29 文件</span></div>
+    <div class="rrow"><span class="k">备份</span><span class="v">~/.nx-kn/backup/import-20261026-1705/</span></div>
+    <div class="rrow"><span class="k">下一步</span><span class="v">kn kb index --rebuild</span></div>`;
+  $('dfoot').innerHTML = `<span class="hint">索引未重建前，检索仍是旧的</span>
+    <span class="grow"></span><button class="btn primary" onclick="closeDrawer()">完成</button>`;
+  toast('已导入 29 篇');
+}
+
+/* ============================================================
+   工具
+   ============================================================ */
+function esc(s){ return String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+
+function rel(t){
+  // 相对时间：扫「多久没动」比读绝对时间快，绝对时间留在 title 里
+  const then = new Date(t.replace(' ', 'T'));
+  const now = new Date('2026-10-26T17:02:00');
+  const min = Math.round((now - then) / 60000);
+  if (min < 1) return '刚刚';
+  if (min < 60) return `${min} 分钟前`;
+  const h = Math.round(min / 60);
+  if (h < 24) return `${h} 小时前`;
+  const d = Math.round(h / 24);
+  if (d < 30) return `${d} 天前`;
+  return `${Math.round(d / 30)} 个月前`;
+}
+
+let toastTimer;
+function toast(msg){
+  const b = $('badge');
+  b.textContent = msg;
+  b.style.background = 'var(--ink)';
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => { b.textContent = '原型 C · 总览 v2 ｜ 示意数据'; }, 1800);
+}
+
+render();
+</script>
+</body>
+</html>

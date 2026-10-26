@@ -1,0 +1,305 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>原型 A · 工作台（主从双栏）</title>
+<style>
+  /* 视觉沿用面板现有 tokens：纸面、一个语义色、28px 行高、14px 卡片圆角 */
+  *{box-sizing:border-box}
+  html,body{height:100%}
+  body{
+    margin:0;background:#fff;color:#14161a;
+    font:12px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei",sans-serif;
+    -webkit-font-smoothing:antialiased;
+  }
+  code,.mono{font-family:ui-monospace,Consolas,"Cascadia Mono",monospace}
+
+  /* ---- 壳：一行 header，与真实面板一致 ---- */
+  header{
+    position:sticky;top:0;z-index:5;display:flex;align-items:center;gap:12px;
+    height:44px;padding:0 16px;background:#fff;border-bottom:1px solid #ebedf0;
+  }
+  .brand{font-weight:700;letter-spacing:.5px;display:flex;align-items:center;gap:8px}
+  .logo{width:22px;height:22px;border-radius:6px;background:#14161a;color:#fff;display:grid;place-items:center;font-size:11px}
+  .brand .sub{font-weight:400;color:#6a6f76;font-size:12px}
+  nav{display:flex;gap:2px}
+  .tab{border:0;background:none;min-height:44px;padding:0 12px;color:#6a6f76;font-size:13px;cursor:pointer}
+  .tab.active{color:#14161a;font-weight:600;box-shadow:inset 0 -2px 0 #14161a}
+  .meta{margin-left:auto;color:#6a6f76;font-size:12px}
+
+  main{padding:16px;max-width:1440px}
+
+  /* ---- 状态条：vault 的「体检」压成一行，不再占一张卡 ---- */
+  .strip{
+    display:flex;align-items:center;gap:12px;flex-wrap:wrap;
+    padding:8px 12px;border:1px solid #ebedf0;border-radius:10px;background:#f5f6f7;margin-bottom:14px;
+  }
+  .strip .path{font-family:ui-monospace,Consolas,monospace;font-size:12px}
+  .strip .sep{width:1px;height:14px;background:#ebedf0}
+  .strip .kv{color:#6a6f76}
+  .strip .kv b{color:#14161a;font-weight:600}
+  .strip .grow{margin-left:auto}
+  .dot{width:7px;height:7px;border-radius:50%;background:#14161a;display:inline-block}
+  .dot.bad{background:#b3261e}
+  .bad-txt{color:#b3261e}
+
+  /* ---- 主从：左列表 / 右详情 ---- */
+  .split{display:grid;grid-template-columns:300px minmax(0,1fr);gap:14px;align-items:start}
+  .card{border:1px solid #ebedf0;border-radius:14px;background:#fff;overflow:hidden}
+  .colhead{
+    display:flex;align-items:center;gap:8px;height:36px;padding:0 12px;
+    color:#6a6f76;font-size:11px;letter-spacing:.4px;border-bottom:1px solid #f5f6f7;text-transform:uppercase;
+  }
+  .colhead .n{color:#14161a;font-weight:600;font-size:12px;letter-spacing:0}
+
+  .plist{padding:6px}
+  .pitem{
+    display:grid;grid-template-columns:1fr auto;gap:2px 8px;align-items:center;
+    padding:7px 10px 7px 8px;border-radius:8px;cursor:pointer;border-left:2px solid transparent;
+  }
+  .pitem:hover{background:#f5f6f7}
+  .pitem.sel{background:#f5f6f7;border-left-color:#14161a}
+  .pitem .name{font-weight:600;font-size:12.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .pitem .sub{grid-column:1/3;color:#6a6f76;font-size:11px}
+  .pitem .sub .warn{color:#b3261e}
+
+  /* 右栏 */
+  .detail{padding:14px 16px}
+  .dhead{display:flex;align-items:flex-start;gap:12px;flex-wrap:wrap}
+  .dhead h1{margin:0;font-size:16px;letter-spacing:.2px}
+  .dhead .sub{color:#6a6f76;font-size:11.5px;margin-top:2px}
+  .actions{margin-left:auto;display:flex;gap:8px}
+  .btn{
+    height:32px;padding:0 12px;border-radius:8px;border:1px solid #ebedf0;background:#fff;
+    color:#14161a;font-size:12px;cursor:pointer;white-space:nowrap;
+  }
+  .btn:hover{background:#f5f6f7}
+  .btn.primary{background:#14161a;border-color:#14161a;color:#fff}
+  .btn.primary:hover{background:#2a2d33}
+  .btn.small{height:26px;padding:0 9px;font-size:11px}
+
+  .sect{margin-top:16px}
+  .sect-h{display:flex;align-items:center;gap:8px;color:#6a6f76;font-size:11px;letter-spacing:.3px;margin-bottom:6px}
+  .sect-h .grow{margin-left:auto}
+
+  .docs{border-top:1px solid #f5f6f7}
+  .doc{display:flex;align-items:baseline;gap:10px;height:28px;padding:0 2px;border-bottom:1px solid #f5f6f7}
+  .doc .f{font-family:ui-monospace,Consolas,monospace;font-size:11.5px;color:#14161a;white-space:nowrap}
+  .doc .h{color:#6a6f76;font-size:11.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .doc .r{margin-left:auto;color:#6a6f76;font-size:10.5px}
+
+  /* 导出 / 导入并排：同一件事的两个方向，不该上下堆成两坨 */
+  .duo{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+  .pane{border:1px solid #ebedf0;border-radius:10px;padding:12px}
+  .pane h3{margin:0 0 8px;font-size:12px;display:flex;align-items:center;gap:6px}
+  .pane .hint{color:#6a6f76;font-size:11px;margin-bottom:8px}
+  .field{display:flex;gap:8px}
+  input[type=text]{
+    flex:1;min-width:0;height:30px;padding:0 10px;border:1px solid #ebedf0;border-radius:8px;
+    background:#fff;font:12px/1 ui-monospace,Consolas,monospace;color:#14161a;
+  }
+  input[type=text]::placeholder{color:#6a6f76}
+  input[type=text]:focus{outline:none;box-shadow:inset 1px 1px 2px rgba(20,22,26,.06),inset -1px -1px 2px #fff}
+  .drop{
+    display:flex;align-items:center;justify-content:center;gap:8px;height:62px;
+    border:1px dashed #ebedf0;border-radius:8px;color:#6a6f76;font-size:11.5px;
+    background:#fafbfb;cursor:pointer;text-align:center;padding:0 10px;
+  }
+  .drop:hover{border-color:#14161a;color:#14161a}
+  .check{display:inline-flex;align-items:center;gap:6px;color:#6a6f76;font-size:11.5px;margin-top:8px}
+  input[type=checkbox]{width:14px;height:14px;accent-color:#14161a;margin:0}
+
+  /* 结果：结构化行，不再是一坨 pre */
+  .result{margin-top:12px;border:1px solid #ebedf0;border-radius:10px;overflow:hidden}
+  .result .rh{display:flex;align-items:center;gap:8px;height:30px;padding:0 12px;background:#f5f6f7;color:#6a6f76;font-size:11px}
+  .result .rh b{color:#14161a;font-weight:600;font-size:12px}
+  .rrow{display:grid;grid-template-columns:104px minmax(0,1fr);gap:12px;padding:6px 12px;border-top:1px solid #f5f6f7}
+  .rrow .k{color:#6a6f76}
+  .rrow .v{font-family:ui-monospace,Consolas,monospace;font-size:11.5px;overflow-wrap:anywhere}
+  .rrow .v.bad{color:#b3261e}
+  .conflict{display:flex;align-items:center;gap:8px;padding:8px 12px;background:#fdf4f3;color:#b3261e;font-size:11.5px;border-top:1px solid #f5f6f7}
+
+  details.cfg{margin-top:14px;border:1px solid #ebedf0;border-radius:10px;padding:0 12px}
+  details.cfg summary{cursor:pointer;height:38px;display:flex;align-items:center;gap:8px;color:#6a6f76;font-size:11.5px;list-style:none}
+  details.cfg summary::-webkit-details-marker{display:none}
+  details.cfg summary::before{content:"▸";font-size:10px;color:#6a6f76}
+  details.cfg[open] summary::before{content:"▾"}
+  .cfg-body{padding:0 0 12px;border-top:1px solid #f5f6f7}
+  .kvrow{display:grid;grid-template-columns:120px minmax(0,1fr);gap:10px;align-items:center;padding:5px 0}
+  .kvrow .k{color:#6a6f76}
+  .cli{margin-top:12px;color:#6a6f76;font-size:11px}
+  .cli div{font-family:ui-monospace,Consolas,monospace;padding:2px 0;overflow-wrap:anywhere}
+  .note{color:#6a6f76;font-size:11px;margin-top:10px}
+  .badge{position:fixed;right:14px;bottom:12px;background:#14161a;color:#fff;font-size:11px;padding:4px 10px;border-radius:999px;opacity:.85}
+</style>
+</head>
+<body>
+
+<header>
+  <div class="brand"><span class="logo">kn</span>nx-kn<span class="sub">Obsidian 知识库</span></div>
+  <nav>
+    <button class="tab">首页</button>
+    <button class="tab">设置</button>
+    <button class="tab active">Obsidian</button>
+    <button class="tab">知识库</button>
+  </nav>
+  <div class="meta">v0.4.6</div>
+</header>
+
+<main>
+  <section class="strip">
+    <span class="dot"></span>
+    <span class="path">D:\Obsidian Vault</span>
+    <span class="sep"></span>
+    <span class="kv">.obsidian <b>已识别</b></span>
+    <span class="sep"></span>
+    <span class="kv">规范文档 <b>1 / 2</b></span>
+    <span class="sep"></span>
+    <span class="kv bad-txt">style 缺失</span>
+    <span class="grow"></span>
+    <button class="btn small">配置</button>
+  </section>
+
+  <div class="split">
+    <!-- 左：项目 -->
+    <div class="card">
+      <div class="colhead">项目 <span class="n" id="pcount">3</span><span style="margin-left:auto">篇数 · 未解析</span></div>
+      <div class="plist" id="plist"></div>
+    </div>
+
+    <!-- 右：详情 + 迁移 -->
+    <div class="card">
+      <div class="detail">
+        <div class="dhead">
+          <div>
+            <h1 id="dname">sedoc-fe-8.60</h1>
+            <div class="sub" id="dsub">29 篇 · 根文档就位 · 未解析 0 · 更新 2026-10-26 16:12</div>
+          </div>
+          <div class="actions">
+            <button class="btn">打开目录</button>
+            <button class="btn primary" onclick="exportNow()">导出并下载</button>
+          </div>
+        </div>
+
+        <div class="sect">
+          <div class="sect-h">文档 <span class="grow"></span><span id="dcount">29</span> 篇 · 点击文件名查看</div>
+          <div class="docs" id="ddocs"></div>
+        </div>
+
+        <div class="sect">
+          <div class="sect-h">迁移</div>
+          <div class="duo">
+            <!-- 导出 -->
+            <div class="pane">
+              <h3>导出</h3>
+              <div class="hint">留空 = 交给浏览器下载；填路径 = 服务端落盘</div>
+              <div class="field">
+                <input type="text" id="out" placeholder="D:\backup\kn-sedoc.zip（可留空）">
+                <button class="btn" onclick="exportNow()">导出</button>
+              </div>
+              <label class="check"><input type="checkbox" checked> 连同其它已勾选项目（<span id="c2">1</span>）</label>
+            </div>
+
+            <!-- 导入 -->
+            <div class="pane">
+              <h3>导入</h3>
+              <div class="hint">先预演，看清楚会覆盖什么，再落地</div>
+              <div class="drop" onclick="dryRun()">把 zip 拖到这里，或点击选择（不写盘）</div>
+              <label class="check"><input type="checkbox" id="force"> 覆盖同名项目（先整目录备份）</label>
+            </div>
+          </div>
+
+          <div class="result" id="result">
+            <div class="rh"><b>导出完成</b><span>2026-10-26 16:52:07</span></div>
+            <div class="rrow"><span class="k">包</span><span class="v">kn-sedoc-fe-8.60-20261026-165207.zip</span></div>
+            <div class="rrow"><span class="k">大小</span><span class="v">150.8 KB（原文 320.4 KB · 29 文件）</span></div>
+            <div class="rrow"><span class="k">落点</span><span class="v">浏览器下载目录</span></div>
+            <div class="rrow"><span class="k">下一步</span><span class="v">另一台机器：nx-kn obsidian import --file &lt;包&gt;</span></div>
+          </div>
+        </div>
+
+        <div class="cli">
+          <div>nx-kn obsidian export --name sedoc-fe-8.60</div>
+          <div>nx-kn obsidian import --file &lt;zip&gt; --dry-run</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <details class="cfg">
+    <summary>vault 与规范文档（设置，平时不需要展开）</summary>
+    <div class="cfg-body">
+      <div class="kvrow"><span class="k">vault 绝对路径</span><input type="text" value="D:\Obsidian Vault"></div>
+      <div class="kvrow"><span class="k">content</span><input type="text" value="nx-kn/base-content.md"></div>
+      <div class="kvrow"><span class="k">style</span><input type="text" value="nx-kn/base-style.md"></div>
+      <div class="kvrow"><span class="k"></span><span class="bad-txt">style：文件不存在</span></div>
+      <div class="kvrow"><span class="k"></span><span><button class="btn small">保存</button> <span class="note">没有改动时禁用</span></span></div>
+    </div>
+  </details>
+</main>
+
+<div class="badge">原型 A · 工作台 ｜ 示意数据</div>
+
+<script>
+  const DATA = {
+    'sedoc-fe-8.60': { docs:29, base:true, un:0, at:'2026-10-26 16:12',
+      list:[['Base-sedoc-fe-8.60.md','sedoc-fe-8.60'],['UI收敛总纲.md','UI 收敛'],['主题系统.md','主题系统'],['组件规范.md','组件规范'],['主题-策略模式.md','主题策略模式'],['标签栏主题化.md','TagsView 主题化'],['表单校验.md','表单校验'],['权限与路由.md','权限与路由'],['档案管理-树.md','档案管理 树组件'],['档案采集.md','档案采集'],['文件预览.md','文件预览'],['状态管理.md','状态管理']],
+      size:'320.4 KB' },
+    'nx-kn': { docs:12, base:false, un:3, at:'2026-10-25 09:40',
+      list:[['面板令牌.md','面板令牌'],['检索链路.md','检索链路'],['zg 接入.md','zg 接入'],['迁移包格式.md','迁移包格式'],['未命名.md','（无标题）']],
+      size:'96.2 KB' },
+    'archive': { docs:8, base:true, un:0, at:'2026-09-30 18:05',
+      list:[['Base-archive.md','archive'],['归档流程.md','归档流程'],['元数据规范.md','元数据规范']],
+      size:'42.7 KB' }
+  };
+  const names = Object.keys(DATA);
+  let sel = 'sedoc-fe-8.60';
+  let checked = new Set(['sedoc-fe-8.60']);
+
+  function renderList(){
+    document.getElementById('plist').innerHTML = names.map(n=>{
+      const d = DATA[n];
+      const warn = d.base ? '' : ' · <span class="warn">缺根文档</span>';
+      const un = d.un ? ` · <span class="warn">未解析 ${d.un}</span>` : '';
+      return `<div class="pitem ${n===sel?'sel':''}" onclick="pick('${n}')">
+        <span class="name">${n}</span>
+        <span class="sub">${d.docs} 篇${warn}${un}</span>
+      </div>`;
+    }).join('');
+    document.getElementById('pcount').textContent = names.length;
+  }
+
+  function pick(n){ sel = n; renderList(); renderDetail(); }
+
+  function renderDetail(){
+    const d = DATA[sel];
+    document.getElementById('dname').textContent = sel;
+    document.getElementById('dsub').textContent =
+      `${d.docs} 篇 · ${d.base?'根文档就位':'缺根文档'} · 未解析 ${d.un} · 更新 ${d.at}`;
+    document.getElementById('dcount').textContent = d.docs;
+    document.getElementById('ddocs').innerHTML = d.list.map(([f,h])=>
+      `<div class="doc"><span class="f">${f}</span><span class="h">${h}</span><span class="r">md</span></div>`).join('')
+      + (d.docs>d.list.length?`<div class="doc"><span class="h">… 另外 ${d.docs-d.list.length} 篇</span></div>`:'');
+  }
+
+  function exportNow(){
+    const d = DATA[sel];
+    document.getElementById('result').innerHTML =
+      `<div class="rh"><b>导出完成</b><span>刚刚</span></div>
+       <div class="rrow"><span class="k">包</span><span class="v">kn-${sel}-20261026-165207.zip</span></div>
+       <div class="rrow"><span class="k">大小</span><span class="v">${d.size} · ${d.docs} 文件</span></div>
+       <div class="rrow"><span class="k">落点</span><span class="v">${document.getElementById('out').value || '浏览器下载目录'}</span></div>`;
+  }
+
+  function dryRun(){
+    document.getElementById('result').innerHTML =
+      `<div class="rh"><b>预演（没有写入任何文件）</b><span>刚刚</span></div>
+       <div class="rrow"><span class="k">包</span><span class="v">sedoc-backup.zip</span></div>
+       <div class="rrow"><span class="k">将导入</span><span class="v">sedoc-fe-8.60 · 29 文件 · 150.8 KB</span></div>
+       <div class="conflict">同名项目已存在：sedoc-fe-8.60 —— 勾选「覆盖同名」后才能导入</div>`;
+  }
+
+  renderList(); renderDetail();
+</script>
+</body>
+</html>
