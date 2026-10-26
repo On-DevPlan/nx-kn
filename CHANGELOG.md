@@ -4,6 +4,63 @@
 
 ## [Unreleased]
 
+## [0.4.7] - 2026-10-26
+
+### Added — 知识库迁移（zip 导出 / 导入）
+
+- 导出：包 = `manifest.json` + `projects/<名>/…`，manifest 是唯一权威（逐文件 sha256）。
+- 导入：覆盖 = 替换（先 rm 再写），并在 `backup/import-<ts>/` 留整目录备份；同名默认整体拒绝。
+- 索引**不进包**：`.zvec-grep` 绑死绝对路径与 embedding 维度，导入后必须 `nx-kn kb index` 重建。
+- `src/core/zip.js` 零依赖最小 zip（store/deflate 子集），同时是安全边界：zip-slip
+  （`..` / 绝对路径 / 盘符）、单文件 64MB、总量 512MB、逐条 CRC；拒 zip64 / 加密 / 分卷 / 未知方法。
+- 传输层两个显式开关：`httpFile`（回字节 + `Content-Disposition`，`filename*=UTF-8''` 保真中文名）、
+  `httpUpload`（原始字节 POST → 临时文件 → `ctx.file`，请求结束即删）。
+- CLI 导出不指定 `--out` 时落当前工作目录并防同名覆盖（`-2` / `-3`）。
+
+### Added — 项目名三级解析
+
+项目名决定 `projects/<名>/`、`Base-<名>.md`、以及每篇笔记的 `[[Base-<名>]]`——**一变就整批笔记
+集体变红链**，所以解析顺序是硬约定：
+
+1. `--project-name` 显式指定
+2. 已有 `Base-*.md` 的 `project:` 绑定反查
+3. `package.json` / `Cargo.toml` / `pyproject.toml` / 目录名推导
+
+返回值带 `projectNameSource` 交代名字来源。目录名是给人看的阅读目录名，不许被 npm 包名绑架；
+显式名不静默 sanitize，会被改动就报 `badInput`。
+
+`projects` 每项新增 `projectPath`（读 Base frontmatter 的 `project:`，读失败一律 `null`），
+CLI 输出多一行「绑定」。
+
+### Added — `obsidian read` 指令：笔记内容读取走指令
+
+- `read()`：`--file` 必填 + `--from` / `--to` 行区间（1 起、含端点）；
+  **越界 / 非整数直接报错，不 clamp**——clamp 会把读错位置伪装成「读到了」。
+- 复用 `readVaultText` 解码链（utf-8-sig → utf-8 → gbk → replace），与 `scan` 同一条：
+  scan 说第 N 行有链接，read 第 N 行就是那段原文。
+
+### Added — `obsidian frontmatter --spec`：笔记 ↔ 风格文档结构化关联
+
+- `genFrontmatterYaml` 加 `specs` 参数：渲染 `spec:` 链接列表（stem = basename 去 ext，
+  与 `bklink` 同口径去重）；空数组不出字段，不传 `--spec` 的 YAML 与旧版**逐字节一致**。
+- `frontmatter()` 加 `--spec <key>[,<key>…]`：key 须已在 `docs.<key>` 登记且文件存在，
+  未登记 / 缺失抛 `notFound` 并给出登记命令；重复 key 只校验 / 收录一次。
+
+### Changed — obsidian 面板重做为「总览表格 + 右侧抽屉」
+
+原来一个页面自上而下堆卡片，项目一多就要滚很久才能看到第 5 个项目；导出 / 导入另占一张卡，
+和项目列表割裂。改成：
+
+- 页头：vault 目录名 + 可复制路径 + 统计 + 信号 chips（对比度按 4.5:1 校准过）
+- 工具条：筛选 chip（全部 / 有未解析 / 缺根文档）、搜索、导入、导出所选
+- 项目表：复选框 / 项目名 + 绑定路径 / 文档 / 未解析 / 根文档 / 最近更新 / hover 行内操作；
+  排序的 tie-break 不跟着升降序翻（同值永远按名字升序）
+- 抽屉四态：项目详情 / 导出 / 导入 / 设置（导出返回键回详情）
+- 批量选择默认空：一进来就全选会让「导出所选」显得无害
+
+新增通用 `<Drawer>`（`components/ui.jsx`）：scrim、Esc 关闭、焦点进 / 还、`inert` 挡 Tab
+进屏外、关闭态 `visibility:hidden`（否则键盘能聚焦到屏幕外）。
+
 ## [0.4.6] - 2026-10-25
 
 ### Changed
