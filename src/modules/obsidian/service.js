@@ -415,8 +415,14 @@ function normalizeCliItems(items) {
  * `project`（项目解读模式）：把「这篇文档讲的是哪个代码库」写进 frontmatter
  * （`project: <绝对路径>`）。后续对这篇文档做双链拷问时，agent 读到这个字段
  * 就知道答案要从哪份源码里找，而不是只复述文档。
+ *
+ * `spec`（规范/风格文档链接）：`--spec <key>[,<key>…]`，key 必须已在
+ * `docs.<key>` 登记且文件存在。命中后在 YAML 里追加 `spec:` wiki 链接列表
+ * （stem = basename 去 ext，与 bklink 同口径），让「按这份规范写的笔记」
+ * 与规范文档之间有结构化关联（Dataview / 反链可查）。校验口径与 spec 指令
+ * 一致——未登记 / 文件缺失直接报错并给出登记命令，不静默跳过。
  */
-export async function frontmatter({ link, source, locate, project, flagVault } = {}) {
+export async function frontmatter({ link, source, locate, project, spec, flagVault } = {}) {
   const { vault, source: vaultSource } = await resolveVault({ flagVault });
   if (!vault) {
     return {
@@ -450,7 +456,34 @@ export async function frontmatter({ link, source, locate, project, flagVault } =
     }
   }
 
-  const yaml = genFrontmatterYaml({ bklink, extra: projectAbs ? { project: projectAbs } : null });
+  // --spec <key>[,<key>…]：规范/风格文档 → frontmatter 里的 spec: wiki 链接。
+  // 逗号分隔支持多篇；重复 key 只校验/收录一次（core 里再按 stem 去重，双保险）。
+  const specStems = [];
+  const specMeta = [];
+  const specKeys = new Set();
+  const specArg = String(spec || '').trim();
+  if (specArg) {
+    const r = await resolvePaths({ flagVault });
+    for (const key of specArg.split(',').map((s) => s.trim()).filter(Boolean)) {
+      if (specKeys.has(key)) continue; // 重复 key 只校验/收录一次
+      specKeys.add(key);
+      const found = r.docs.find((d) => d.key === key);
+      if (!found) {
+        const registered = r.docs.map((d) => d.key).join(', ') || '(无)';
+        throw notFound(
+          `规范文档未登记: ${key}（已登记: ${registered}）—— 用 ${APP_NAME} obsidian set ${OBSIDIAN_DOCS_PREFIX}${key}=<相对路径> 登记`
+        );
+      }
+      if (!found.exists) {
+        throw notFound(`规范文档不存在: ${found.path} —— 把规范写进这个文件，或改登记指向已有文件`);
+      }
+      const [stem] = splitExt(baseName(found.rel));
+      if (stem && !specStems.includes(stem)) specStems.push(stem);
+      specMeta.push({ key, rel: found.rel, stem });
+    }
+  }
+
+  const yaml = genFrontmatterYaml({ bklink, specs: specStems, extra: projectAbs ? { project: projectAbs } : null });
   return {
     status: 'ok',
     configured: true,
@@ -461,6 +494,7 @@ export async function frontmatter({ link, source, locate, project, flagVault } =
     ...(projectAbs ? { project: projectAbs } : {}),
     bklink,
     located,
+    ...(specMeta.length ? { spec: specMeta } : {}),
     yaml,
   };
 }

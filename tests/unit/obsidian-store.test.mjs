@@ -335,6 +335,40 @@ test('frontmatter: --project 把文档和代码库绑在一起（项目解读模
   );
 });
 
+test('frontmatter: --spec 把已登记的规范文档变成 spec: wiki 链接（未登记/缺失都报错）', async () => {
+  tmpData();
+  const vault = fakeVault();
+  await mutateStore((s) => {
+    s.obsidian.vault = vault;
+  });
+
+  // 成功路径：content 已默认登记且文件存在 → YAML 追加 spec: 列表
+  const r = await obsidian.frontmatter({ link: '目标', source: '日常/foo.md', spec: 'content' });
+  assert.deepEqual(r.spec, [{ key: 'content', rel: 'nx-kn/base-content.md', stem: 'base-content' }]);
+  assert.match(r.yaml, /spec:\n  - "\[\[base-content\]\]"/);
+
+  // 逗号分隔多篇 + 重复 key 去重
+  const r2 = await obsidian.frontmatter({ link: '目标', source: '日常/foo.md', spec: 'content,questionnaire,content' });
+  assert.match(r2.yaml, /  - "\[\[base-content\]\]"/);
+  assert.match(r2.yaml, /  - "\[\[questionnaire\]\]"/);
+  assert.equal(r2.spec.length, 2, '重复 key 要去重');
+
+  // 未登记 → notFound，错误信息里带登记命令
+  await assert.rejects(
+    () => obsidian.frontmatter({ link: 'x', source: '日常/foo.md', spec: 'no-such' }),
+    (e) => e.code === 'NOT_FOUND' && /规范文档未登记: no-such/.test(e.message) && /obsidian set docs\.no-such=/.test(e.message)
+  );
+
+  // 登记了但文件不存在 → notFound
+  await mutateStore((s) => {
+    s.obsidian.docs.missing = 'nx-kn/no-such-doc.md';
+  });
+  await assert.rejects(
+    () => obsidian.frontmatter({ link: 'x', source: '日常/foo.md', spec: 'missing' }),
+    (e) => e.code === 'NOT_FOUND' && /规范文档不存在/.test(e.message)
+  );
+});
+
 // ---- 校验：新笔记有没有引入新的未解析双链 ----
 
 test('check: 存快照 → 写入新笔记 → 差分，发现新引入的红链', async () => {

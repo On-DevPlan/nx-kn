@@ -131,12 +131,13 @@ export default {
       cli: ['obsidian', 'frontmatter'],
       http: ['GET', '/api/obsidian/frontmatter'],
       summary:
-        '生成新笔记的 frontmatter YAML 段（creatime / tags / bklink，可加 project=<项目根> 绑定代码库），可直接当 Write content 开头',
+        '生成新笔记的 frontmatter YAML 段（creatime / tags / bklink，可加 project=<项目根> 绑定代码库、--spec <key> 链接已登记的规范/风格文档），可直接当 Write content 开头',
       flags: {
         link: { type: 'string', required: true, hint: '笔记名（双链文本）' },
         source: { type: 'string', hint: '引用了这个链接的源文件（相对 vault 根）' },
         locate: { type: 'boolean', hint: '扫全库找出所有引用源' },
         project: { type: 'string', hint: '项目解读模式：这篇文档讲的是哪个代码库（绝对路径）' },
+        spec: { type: 'string', hint: '规范/风格文档的登记 key（可逗号分隔多个；须先 obsidian set docs.<key>=<相对路径> 登记）' },
         vault: { type: 'string', hint: 'vault 绝对路径（覆盖配置）' },
       },
       run: (ctx) =>
@@ -145,6 +146,7 @@ export default {
           source: ctx.source,
           locate: ctx.locate,
           project: ctx.project,
+          spec: ctx.spec,
           flagVault: ctx.vault,
         }),
       render: (r) => {

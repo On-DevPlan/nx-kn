@@ -137,6 +137,19 @@ test('genFrontmatterYaml：没有 bklink 时写空数组（不是空值）', () 
   assert.match(yaml, /creatime: 2026-01-02 03:04:05/);
 });
 
+test('genFrontmatterYaml：specs 渲染成 spec: wiki 链接列表（stem 去重）；不传时不出该字段', () => {
+  const withSpec = genFrontmatterYaml({
+    bklink: ['日常/foo.md'],
+    specs: ['ctl/tmpl_风格.md', '规范.md', 'ctl/tmpl_风格.md'],
+    now: new Date(2026, 0, 2, 3, 4, 5),
+  });
+  // spec: 在 bklink 之后、--- 之前；重复按 stem 去重；带扩展名的传法与 stem 传法结果一致
+  assert.match(withSpec, /bklink:\n  - "\[\[foo\]\]"\nspec:\n  - "\[\[tmpl_风格\]\]"\n  - "\[\[规范\]\]"\n---/);
+
+  const noSpec = genFrontmatterYaml({ bklink: [], now: new Date(2026, 0, 2, 3, 4, 5) });
+  assert.doesNotMatch(noSpec, /spec:/, '不传 specs 的 YAML 不应有 spec: 字段');
+});
+
 test('formatLocalTimestamp：用本地时区，不用 UTC（toISOString 会差几个小时）', () => {
   assert.equal(formatLocalTimestamp(new Date(2026, 0, 2, 3, 4, 5)), '2026-01-02 03:04:05');
 });

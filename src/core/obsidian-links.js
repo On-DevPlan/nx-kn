@@ -236,6 +236,7 @@ export function formatLocalTimestamp(now = new Date()) {
 export function genFrontmatterYaml({
   keys = DEFAULT_FRONTMATTER_KEYS,
   bklink = [],
+  specs = [],
   now = new Date(),
   extra = null,
 } = {}) {
@@ -266,6 +267,20 @@ export function genFrontmatterYaml({
     } else {
       lines.push(`${key}:`);
     }
+  }
+  // 规范/风格文档链接（spec:）：渲染成 wiki 链接列表，与 bklink 同口径
+  // （basename 去 ext 的 stem）。**空数组时不输出该字段**——不传 --spec 的
+  // YAML 与旧版逐字节一致（向后兼容，老测试钉住的形状不变）。
+  if (specs.length) {
+    const seen = new Set();
+    const specLines = [];
+    for (const entry of specs) {
+      const [stem] = splitExt(baseName(String(entry)));
+      if (!stem || seen.has(stem)) continue;
+      seen.add(stem);
+      specLines.push(`  - "[[${stem}]]"`);
+    }
+    if (specLines.length) lines.push('spec:', ...specLines);
   }
   // 附加字段（如 project：这篇文档讲的是哪个代码库）——追加在三段之后。
   // 值含反斜杠的 Windows 路径按 YAML 双引号标量写，避免 `\` 被当转义序列。
