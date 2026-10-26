@@ -72,6 +72,29 @@ export default {
       },
     },
     {
+      id: 'obsidian.read',
+      cli: ['obsidian', 'read'],
+      http: ['GET', '/api/obsidian/read'],
+      summary:
+        '读一篇 vault 笔记的内容（走与 scan 同一条解码链，GBK/BOM 免乱码；--from/--to 取行区间，行号可直接用于「文件:行号」引用）',
+      flags: {
+        file: { type: 'string', required: true, hint: '笔记路径（相对 vault 根）' },
+        from: { type: 'number', hint: '起始行（1 起，含端点；缺省 = 1）' },
+        to: { type: 'number', hint: '结束行（含端点；缺省 = 最后一行）' },
+        vault: { type: 'string', hint: 'vault 绝对路径（覆盖配置）' },
+      },
+      run: (ctx) => service.read({ file: ctx.file, from: ctx.from, to: ctx.to, flagVault: ctx.vault }),
+      render: (r) => {
+        if (r.configured === false) {
+          return ['vault 未设置', ...(r.hints || []).map((h) => `  ${h}`)].join('\n');
+        }
+        return [
+          `${r.file} · 第 ${r.from}-${r.to} 行 / 共 ${r.total} 行 · vault: ${r.vault}`,
+          ...r.lines.map((l) => `${String(l.n).padStart(5)}  ${l.text}`),
+        ].join('\n');
+      },
+    },
+    {
       id: 'obsidian.scan',
       cli: ['obsidian', 'scan'],
       http: ['POST', '/api/obsidian/scan'],

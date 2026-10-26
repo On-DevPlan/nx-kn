@@ -188,6 +188,66 @@ export async function spec({ doc, flagVault } = {}) {
   };
 }
 
+// ---- 读笔记内容 ----
+
+/**
+ * 读一篇 vault 笔记的内容（「内容获取走指令」的落点）。
+ *
+ * agent 不再直接 Read/Grep 拿笔记正文——直接 Read 遇到 GBK / BOM 文件会拿到
+ * 乱码，而这里走的解码链与 scan / frontmatter 是**同一条**（口径一致：
+ * scan 说这几行有链接，read 出来的就是那段原文）。行号 1 起、含端点，
+ * 可直接用于「文件:行号」式引用与 `--from`/`--to` 精确复读。
+ */
+export async function read({ file, from, to, flagVault } = {}) {
+  const { vault } = await resolveVault({ flagVault });
+  if (!vault) {
+    return { status: 'ok', configured: false, hints: (await resolvePaths({ flagVault })).hints };
+  }
+  if (!isDir(vault)) throw notFound(`vault 目录不存在: ${vault}`);
+
+  const rel = assertSafeRelPath(file, { label: '笔记路径' });
+  const abs = join(vault, rel);
+  if (!existsSync(abs) || !statSync(abs).isFile()) {
+    throw notFound(`笔记不存在: ${rel}（vault: ${vault}）`);
+  }
+
+  const text = readVaultText(abs);
+  const all = text.split('\n');
+  const total = all.length;
+  const a = normLineNo(from, 1, total, 'from');
+  const b = normLineNo(to, total, total, 'to');
+  if (a > b) {
+    throw badInput(`行区间反了: --from ${a} > --to ${b}`);
+  }
+
+  return {
+    status: 'ok',
+    configured: true,
+    vault,
+    file: rel,
+    path: abs,
+    total,
+    from: a,
+    to: b,
+    bytes: Buffer.byteLength(text, 'utf8'),
+    lines: all.slice(a - 1, b).map((t, i) => ({ n: a + i, text: t })),
+  };
+}
+
+// 行号归一：空值给默认；非整数 / 越界直接报——**不是 clamp**，
+// clamp 会把算错的行号变成「读到了」的假象（读到别处还以为自己读了原文）。
+function normLineNo(v, dflt, max, label) {
+  if (v === undefined || v === null || v === '') return dflt;
+  const n = Number(v);
+  if (!Number.isInteger(n) || n < 1) {
+    throw badInput(`--${label} 必须是正整数: ${v}`);
+  }
+  if (n > max) {
+    throw badInput(`--${label} 超出范围: ${n}（全文共 ${max} 行）`);
+  }
+  return n;
+}
+
 // ---- set：写配置 ----
 
 const VALIDATORS = {

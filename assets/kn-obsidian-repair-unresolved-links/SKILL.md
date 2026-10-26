@@ -26,13 +26,13 @@ description: Obsidian vault 中存在未解析的 `[[]]` 双链，需要补全�
 | **0. 拿规范**      | `nx-kn obsidian spec` → `spec --doc <key>`      | 列出登记的规范，取本次要用的那几份全文 | 规范全文 + vault 根      |
 | **1. 查看**        | `nx-kn obsidian scan --json`                       | 扫出全库未解析双链                     | 链接 + 出处（文件:行号） |
 | **2. 过滤**        | （scan 已自动排除）                                  | 剔掉附件与模板占位链接                 | 待处理链接               |
-| **3. 定位**        | Grep（可选）                                         | 读 source 上下文，理解这条链接指什么   | 上下文摘要               |
+| **3. 定位**        | `nx-kn obsidian read --file … --from N --to N`       | 读 source 上下文，理解这条链接指什么   | 上下文摘要               |
 | **4. frontmatter** | `nx-kn obsidian frontmatter --source … --link …` | 生成合规 YAML 段                       | `---` 包裹的 YAML      |
 | **5. 修文件名**    | 同上（看 `filename` 字段）                         | 人工判断标点要不要改写                 | 最终文件名               |
 | **6. 生成内容**    | （按步骤 0 取到的内容规范）                          | 写深入、不重复的正文                   | 正文                     |
 | **7. 创建**        | Write                                                | 写到 source 同目录                     | 新笔记文件               |
 | **8. 校验**        | `nx-kn obsidian check --snapshot-before …`        | 确认新笔记没引入新红链                 | passed=true/false        |
-| **9. 验证**        | `head -3` / 再跑一次 `scan`                      | frontmatter 在位、链接消失             | 收尾                     |
+| **9. 验证**        | `obsidian read`（前 3 行）/ 再跑一次 `scan`      | frontmatter 在位、链接消失             | 收尾                     |
 
 ---
 
@@ -99,7 +99,7 @@ nx-kn obsidian get --json
                                                               ↓
             8. 双链引用校验（snapshot diff）──┐
                                           ↓
-                  9. 验证（head -3 + 再扫一次）─┘
+                  9. 验证（read 前 3 行 + 再扫一次）─┘
 ```
 
 ### 1. 查看
@@ -134,15 +134,17 @@ nx-kn obsidian scan --json
 - **图片 / 附件链接**（`.png` / `.jpg` / `.pdf` / `.zip` 等）——Obsidian 当附件处理（`scan` 已经自动排除）
 - **模板文件** `ctl/tmpl_*.md` 中的占位示例链接（`scan` 已经自动排除）
 
-### 3. 定位
+### 3. 定位（内容读取走指令）
 
-`scan` 的输出里已经带 `file` + `line`，不必再 Grep。要上下文就：
+`scan` 的输出里已经带 `file` + `line`，不必再 Grep。要上下文就用 **read 指令**拿原文：
 
 ```bash
-grep -rn "\[\[xxx\]\]" --include="*.md" 日常/  # 排除 ctl/、.claude/、.zvec-grep/
+nx-kn obsidian read --file {file} --from <line-3> --to <line+10> --json
 ```
 
-记下 `{file}`、`{line}`、前后 3 句上下文（用于步骤 6 理解链接含义）。
+- 内容走 nx-kn 的解码链（utf-8 → gbk → replace 兜底）：GBK / BOM 文件直接 Read 会拿到乱码，read 出来的与 scan 用的是**同一条解码链**——scan 说第 N 行有链接，read 的第 N 行就是它
+- 区间不够就去掉 `--from/--to` 读全文；`--json` 的 `lines[]` 每项带 `n`（行号）与 `text`
+- 记下 `{file}`、`{line}`、上下文摘要（用于步骤 6 理解链接含义与查重）
 
 ### 4. 生成 frontmatter（硬性步骤，不可跳过）
 
@@ -168,7 +170,7 @@ nx-kn obsidian frontmatter --source 日常/foo.md --link "xxx" --locate
 
 ### 6. 生成内容
 
-按步骤 0 取到的**内容规范文档**的规范写。读 `{file}` 上下文后生成**深入、不重复**的笔记。
+按步骤 0 取到的**内容规范文档**的规范写。用 read 指令读源文件上下文（步骤 3 的命令）后生成**深入、不重复**的笔记。
 
 **主题 → 模式** 的映射（内容规范里也是这么分的）：
 
@@ -228,8 +230,8 @@ nx-kn obsidian check --snapshot-before snapshot.json --new-file "projects/<项�
 
 ### 9. 验证
 
-- `head -3 <新文件>` 第一行必须是 `---`（YAML 起始）
-- `head -10 <新文件>` 必须能见到 `creatime:` / `tags:` / `bklink:` 三段
+- `nx-kn obsidian read --file <新文件相对路径> --to 3` 第一行必须是 `---`（YAML 起始）
+- `--to 10` 必须能见到 `creatime:` / `tags:` / `bklink:` 三段
 - 再跑一次 `nx-kn obsidian scan --json`，确认刚才那个链接不见了
 
 ---
@@ -347,7 +349,7 @@ bklink:
 - 主线程必须在派发 subagent **之前** 跑完 `nx-kn obsidian frontmatter`，把命令输出的 YAML 段（即 `---` 到下一个 `---` 之间的内容）复制到 subagent prompt 的 `{frontmatter_yaml}` 占位符位置。subagent **不要自己写** frontmatter——直接用主线程注入的 YAML。
 - 主线程还要先跑 `nx-kn obsidian spec` 拿清单、按用途取正文，并把**内容规范文档的路径**注入到 `{content_spec}` 占位符（subagent 自己 Read 那一份——规范可能很长，复制进每个 prompt 是浪费）。
 - 所有 subagent 完成后，主线程**统一跑一次** `nx-kn obsidian check`（步骤 8），校验所有新文件内部的双链
-- 每个 subagent 单独跑 prompt 内的 `head -3` 自检 frontmatter（步骤 9 子步骤）
+- 每个 subagent 单独跑 prompt 内的 `obsidian read`（`--to 3`）自检 frontmatter（步骤 9 子步骤）
 
 ### Prompt 模板（所有 `{xxx}` 都是占位符，必须由主线程替换）
 
@@ -374,7 +376,8 @@ nx-kn obsidian frontmatter --source {file} --link "{link}" --locate
 === 任务（占位符在派发前已替换为具体值）===
 
 1. 源文件 {file} 第 {line} 行引用了 [[{link}]]
-2. 读源文件上下文，理解链接含义
+2. 用指令读上下文：`nx-kn obsidian read --file {file} --from {from_line} --to {to_line} --json`
+   （主线程派发前把 from/to 算好：line−3 与 line+10；GBK/BOM 文件这样读才不乱码）
 3. 先读 {content_spec}（内容规范文档的绝对路径，主线程已解析），生成内容以它为准
    - 若 {content_spec} 仍是占位符：先跑 `nx-kn obsidian spec` 拿清单、再跑 `nx-kn obsidian spec --doc <key>` 取全文；再失败则从 {file} 沿父目录找 `.obsidian`，默认取 `<vault>/nx-kn/base-content.md`
    - 根据主题选择对应模式：概念深潜 / 实践拆解 / 还原论拆解 / 概念拓扑
@@ -389,7 +392,7 @@ nx-kn obsidian frontmatter --source {file} --link "{link}" --locate
 - 注意：YAML 块用 `---` 包裹，不要因为看到 === 就照抄 ===
 - 然后接 # 标题 和正文
 - 文件名 {safe}.md，写入 source 文件同目录（如 source 在 `日常/` 下，则写 `日常/{safe}.md`）
-- 写完后用 Read 工具读回前 3 行验证 frontmatter 存在
+- 写完后用 read 指令读回前 3 行验证 frontmatter 存在：`nx-kn obsidian read --file {safe 所在相对路径} --to 3`
 ```
 
 ---
@@ -584,6 +587,7 @@ nx-kn skill groups
 | `nx-kn obsidian spec --doc <key>`                                       | **取该规范全文**（步骤 0.2 / 步骤 6 / 步骤 8） |
 | `nx-kn obsidian get --json`                                             | 取 vault 根 + 规范登记项                             |
 | `nx-kn obsidian scan --json [--project <项目根>]`                   | 扫未解析双链；带 `--project` 只扫该项目目录（步骤 1 / 9）|
+| `nx-kn obsidian read --file <相对路径> [--from N] [--to N]`      | **读笔记内容**（与 scan 同一条解码链，GBK/BOM 免乱码；行区间含端点，行号可直接用于「文件:行号」引用）——步骤 3 / 6 / 9 的上下文与自检都走它 |
 | `nx-kn obsidian frontmatter --source <文件> --link "<文本>" [--locate] [--project <项目根>]` | 生成 frontmatter YAML 段（步骤 4；`--project` 用于项目解读模式） |
 | `nx-kn obsidian ask --question "<原始提问>" [--project <项目根>] [--source <出处文档>]` | **项目域提问唯一入口**：定位 / 初始化 Base、把提问清洗后以 `[[…]]` 追加到根文档末尾（幂等）、返回**目标笔记的 frontmatter**（bklink = 根文档 + 问题链接，project 绑定项目根）与答案笔记位置；不带 `--question` = 仅初始化根文档 |
 | `nx-kn obsidian check --snapshot <文件> [--project <项目根>]`      | 存未解析链接快照（步骤 8 前）；带 `--project` 只 check 该项目 |
@@ -595,8 +599,8 @@ nx-kn skill groups
 
 ## 验证清单（每篇笔记写完后必过）
 
-- [ ] `head -3 <新文件>` 第一行是 `---`（YAML 起始）
-- [ ] `head -10 <新文件>` 能看到 `creatime:`、`tags:`、`bklink:` 三段
+- [ ] `nx-kn obsidian read --file <新文件相对路径> --to 3` 第一行是 `---`（YAML 起始）
+- [ ] `--to 10` 能看到 `creatime:`、`tags:`、`bklink:` 三段
 - [ ] **新文件名不含 `, . ?` 等 Obsidian 不支持的字符**（如违反需重写标题，见上「标题 sanitization 规则」）
 - [ ] 再跑一次 `nx-kn obsidian scan --json`，刚才那个链接**不在**列表里
 - [ ] 跑步骤 8 `nx-kn obsidian check --snapshot-before ... --new-file ...`，`passed` 为 true——确认新文件内部的双链也全部解析成功
